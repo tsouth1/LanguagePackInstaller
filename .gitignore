@@ -1,0 +1,4 @@
+# Language CABs live in the repository share, not in Git
+Repository/
+*.cab
+*.log
