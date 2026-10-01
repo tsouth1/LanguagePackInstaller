@@ -282,7 +282,7 @@ function Test-LpiPrerequisite {
     elseif (-not (Test-Path -LiteralPath (Join-Path -Path $Repository -ChildPath 'metadata'))) {
         $problems.Add("The language repository has no 'metadata' folder, which DISM needs to add language features: $Repository")
     }
-    return , $problems.ToArray()
+    return $problems.ToArray()
 }
 
 #endregion
