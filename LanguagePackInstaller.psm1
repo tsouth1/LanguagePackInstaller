@@ -273,6 +273,10 @@ function Test-LpiPrerequisite {
     if (-not (Test-Path -LiteralPath $UserScriptPath)) {
         $problems.Add("The per-user script was not found: $UserScriptPath")
     }
+    $completeScript = Join-Path -Path (Split-Path -Path $UserScriptPath -Parent) -ChildPath 'Complete-SystemLanguage.ps1'
+    if (-not (Test-Path -LiteralPath $completeScript)) {
+        $problems.Add("The completion script was not found: $completeScript")
+    }
     if (-not (Test-Path -LiteralPath $Repository)) {
         $problems.Add("The language repository was not found: $Repository")
     }
@@ -334,7 +338,7 @@ function Install-LpiLanguage {
         Write-LpiLog -Message "Adding language pack $(Split-Path -Path $Language.PackagePath -Leaf). This can take several minutes."
         $result = Add-WindowsPackage -Online -PackagePath $Language.PackagePath -NoRestart -LogPath $dismLog -ErrorAction Stop
         if (Test-LpiRestartNeeded -Result $result) { $restartNeeded = $true }
-        Write-LpiLog -Message "Language pack for $tag added."
+        Write-LpiLog -Message "Language pack for $tag added (DISM restart needed: $(Test-LpiRestartNeeded -Result $result))."
     }
 
     $capabilities = @($files | Where-Object { $_.Kind -in @('Feature', 'Font') })
@@ -411,7 +415,8 @@ function Install-LpiFodSatellite {
             Write-LpiLog -Level Warning -Message "Could not add $($item.File.Name): $($_.Exception.Message)"
         }
     }
-    if ($attempted -eq 0) { Write-LpiLog -Message "No further $tag resources were needed for installed Features on Demand." }
+    $neutral = @($installed | Where-Object { $_.EndsWith('~') }).Count
+    Write-LpiLog -Message "FOD resources: $(@($satellites).Count) $tag satellite CABs in the repository, $neutral installed neutral packages, $attempted added."
     return $restartNeeded
 }
 
@@ -440,7 +445,7 @@ function Disable-LpiLanguageCleanup {
 
 function Publish-LpiUserScript {
     <#
-        Copies Set-UserLanguage.ps1 to %ProgramData%\LanguagePackInstaller where standard users
+        Copies Set-UserLanguage.ps1 (and Complete-SystemLanguage.ps1) to %ProgramData%\LanguagePackInstaller where standard users
         can read and run it (the ConfigMgr cache is admin-only). Users get read/execute on the
         script and modify on the Logs folder only.
     #>
@@ -458,6 +463,8 @@ function Publish-LpiUserScript {
 
     $target = Join-Path -Path $root -ChildPath 'Set-UserLanguage.ps1'
     Copy-Item -LiteralPath $UserScriptPath -Destination $target -Force
+    $completeScript = Join-Path -Path (Split-Path -Path $UserScriptPath -Parent) -ChildPath 'Complete-SystemLanguage.ps1'
+    Copy-Item -LiteralPath $completeScript -Destination $root -Force
     return $target
 }
 
@@ -534,11 +541,37 @@ function Register-LpiActiveSetup {
     Write-LpiLog -Message 'Registered Active Setup: other existing users get the language settings at their next sign-in.'
 }
 
+function Register-LpiCompleteTask {
+    <#
+        One-shot SYSTEM startup task that finishes the system part of a display-language change
+        (Complete-SystemLanguage.ps1) once the language pack is no longer pending a restart.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$ScriptPath,
+        [Parameter(Mandatory)][string]$Language,
+        [switch]$SetRegionalFormat
+    )
+    $powershell = Join-Path -Path $env:windir -ChildPath 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`" -Language $Language"
+    if ($SetRegionalFormat) { $arguments += ' -SetRegionalFormat' }
+    $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $trigger.Delay = 'PT1M'
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
+        -ExecutionTimeLimit (New-TimeSpan -Minutes 15)
+    Register-ScheduledTask -TaskName 'LanguagePackInstaller-CompleteSystemLanguage' -TaskPath '\' -Action $action `
+        -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    Write-LpiLog -Message 'Registered a startup task that finishes the system display language after the restart.'
+}
+
 function Set-LpiDisplayLanguage {
     <#
-        System part: system preferred UI language, Welcome screen and new-user defaults, and
-        optionally the system locale. User part: the signed-in user(s), and optionally every
-        other existing user at next sign-in.
+        System part: system preferred UI language, Welcome screen and new-user defaults.
+        User part: the signed-in user(s), and optionally every other existing user at next
+        sign-in. Windows can refuse the system part until the restart that completes the
+        language pack; then a startup task finishes it, and the run still succeeds (3010).
     #>
     [CmdletBinding()]
     param(
@@ -548,9 +581,9 @@ function Set-LpiDisplayLanguage {
         [switch]$ApplyToExistingUsers
     )
     $tag = ConvertTo-LpiLanguageTag -Language $Language
-
-    Write-LpiLog -Message "Setting the system preferred UI language to $tag."
-    Set-SystemPreferredUILanguage -Language $tag -ErrorAction Stop
+    $publishedScript = Publish-LpiUserScript -UserScriptPath $UserScriptPath
+    $userLogs = Join-Path -Path $script:UserDataRoot -ChildPath 'Logs'
+    $systemDone = $true
 
     # Copy-UserInternationalSettingsToSystem copies the *running* account's settings, so set
     # them on this account first (SYSTEM under ConfigMgr). Run the copy from the package
@@ -560,15 +593,38 @@ function Set-LpiDisplayLanguage {
     $arguments = Get-LpiUserScriptArgument -ScriptPath $UserScriptPath -Language $tag -SetRegionalFormat:$SetRegionalFormat
     $process = Start-Process -FilePath $powershell -ArgumentList $arguments -Wait -PassThru -WindowStyle Hidden
     if ($process.ExitCode -ne 0) {
-        throw "Applying the language to the running account failed (exit code $($process.ExitCode)). See the user logs in $(Join-Path $script:UserDataRoot 'Logs')."
+        Write-LpiLog -Level Warning -Message "Applying $tag to the running account failed (exit code $($process.ExitCode)); see $userLogs."
+        $systemDone = $false
     }
 
-    Write-LpiLog -Message 'Copying the language settings to the Welcome screen and new user accounts.'
-    Copy-UserInternationalSettingsToSystem -WelcomeScreen $true -NewUser $true -ErrorAction Stop
+    if ($systemDone) {
+        Write-LpiLog -Message "Setting the system preferred UI language to $tag."
+        try {
+            Set-SystemPreferredUILanguage -Language $tag -ErrorAction Stop
+        }
+        catch {
+            Write-LpiLog -Level Warning -Message "Windows refused the system preferred UI language for now: $($_.Exception.Message)"
+            $systemDone = $false
+        }
+    }
 
-    $publishedScript = Publish-LpiUserScript -UserScriptPath $UserScriptPath
+    if ($systemDone) {
+        Write-LpiLog -Message 'Copying the language settings to the Welcome screen and new user accounts.'
+        try {
+            Copy-UserInternationalSettingsToSystem -WelcomeScreen $true -NewUser $true -ErrorAction Stop
+        }
+        catch {
+            Write-LpiLog -Level Warning -Message "Windows refused to copy the settings to the Welcome screen and new users for now: $($_.Exception.Message)"
+            $systemDone = $false
+        }
+    }
+
+    if (-not $systemDone) {
+        $completeScript = Join-Path -Path $script:UserDataRoot -ChildPath 'Complete-SystemLanguage.ps1'
+        Register-LpiCompleteTask -ScriptPath $completeScript -Language $tag -SetRegionalFormat:$SetRegionalFormat
+    }
+
     $userArguments = Get-LpiUserScriptArgument -ScriptPath $publishedScript -Language $tag -SetRegionalFormat:$SetRegionalFormat
-
     $self = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     $users = @(Get-LpiLoggedOnUser | Where-Object { $_ -ne $self })
     if (-not $users) {
@@ -582,7 +638,7 @@ function Set-LpiDisplayLanguage {
                 Write-LpiLog -Level Warning -Message "The user step for $user did not finish in time."
             }
             elseif ($exitCode -ne 0) {
-                Write-LpiLog -Level Warning -Message "The user step for $user failed (exit code $exitCode). See the user logs in $(Join-Path $script:UserDataRoot 'Logs')."
+                Write-LpiLog -Level Warning -Message "The user step for $user failed (exit code $exitCode); see $userLogs."
             }
             else {
                 Write-LpiLog -Message "Applied $tag for $user. It takes effect when they sign out and back in."

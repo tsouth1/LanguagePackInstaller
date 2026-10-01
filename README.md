@@ -11,6 +11,7 @@ Supports **Windows 11 24H2 (build 26100) and later**, client editions only.
 | `Install-LanguagePack.ps1` | Entry point. GUI (language drop-down, "Set as display language") or `-Silent`. |
 | `LanguagePackInstaller.psm1` | Core logic: repository discovery, DISM install, system settings, per-user hand-off. |
 | `Set-UserLanguage.ps1` | Per-user (HKCU) settings. Runs as each user, never on behalf of one. |
+| `Complete-SystemLanguage.ps1` | One-shot SYSTEM startup task that finishes the system display language after the restart, if Windows refused it during the install. |
 | `New-LanguageRepository.ps1` | Builds a trimmed repository for chosen languages from the LOF ISO. |
 | `languagecabs.csv` | Listing of the 24H2 LOF ISO `LanguagesAndOptionalFeatures` folder, for reference. |
 
@@ -61,7 +62,13 @@ if you want to wrap it anyway.
 5. Sets `BlockCleanupOfUnusedPreinstalledLangPacks`, so Windows' `LPRemove` task does not remove
    a language no one has selected yet (skip with `-AllowLanguageCleanup`).
 6. If **Set as display language** is ticked: runs the system and per-user steps above.
-   Optionally sets the regional format and country/region as well.
+   Optionally sets the regional format and country/region as well. Straight after the language
+   pack is added, Windows can refuse the system steps ("Value does not fall within the expected
+   range") until the restart that completes it. In that case the installer logs a warning, still
+   applies the per-user settings, and registers the startup task
+   `LanguagePackInstaller-CompleteSystemLanguage`. That task finishes the system part after the
+   restart and then removes itself; a second restart then shows the new language on the
+   Welcome screen.
 7. Writes `HKLM\SOFTWARE\LanguagePackInstaller\Languages\<tag>` (`InstalledOn`, `Source`) and, for
    the display language, `HKLM\SOFTWARE\LanguagePackInstaller\DisplayLanguage`.
 
