@@ -6,9 +6,15 @@ language. It has a Windows Forms GUI, and a silent mode for fixed-language deplo
 
 Supports **Windows 11 24H2 (build 26100) and later**, client editions only.
 
+![The installer window: language drop-down, "Set as display language", progress log](images/installer-gui.png)
+
+The language list shows each language's English and native name and its tag, marks partial languages
+`[partial]` and languages already on the device `[installed]`. The log box shows each step while it installs.
+
 | File | Purpose |
 |---|---|
 | `Install-LanguagePack.ps1` | Entry point. GUI (language drop-down, "Set as display language") or `-Silent`. |
+| `Uninstall-LanguagePack.ps1` | Removes a language installed with this tool (the uninstall program for ConfigMgr). |
 | `LanguagePackInstaller.psm1` | Core logic: repository discovery, DISM install, system settings, per-user hand-off. |
 | `Set-UserLanguage.ps1` | Per-user (HKCU) settings. Runs as each user, never on behalf of one. |
 | `Complete-SystemLanguage.ps1` | One-shot SYSTEM startup task that finishes the system display language after the restart, if Windows refused it during the install. |
@@ -60,7 +66,9 @@ if you want to wrap it anyway.
    if that fails. Only a Basic failure stops the run.
 4. Adds this language's satellite CABs for Features on Demand that are already installed.
 5. Sets `BlockCleanupOfUnusedPreinstalledLangPacks`, so Windows' `LPRemove` task does not remove
-   a language no one has selected yet (skip with `-AllowLanguageCleanup`).
+   a language no one has selected yet (skip with `-AllowLanguageCleanup`). If the policy was not set already,
+   it records that in `HKLM\SOFTWARE\LanguagePackInstaller` (`CleanupPolicySet`), so the uninstall removes only
+   a policy this tool set, never one set by Group Policy.
 6. If **Set as display language** is ticked: runs the system and per-user steps above.
    Optionally sets the regional format and country/region as well. Straight after the language
    pack is added, Windows can refuse the system steps ("Value does not fall within the expected
@@ -117,12 +125,34 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-LanguagePack.p
 | `-LogPath` | Log folder. Default: `%windir%\Logs\LanguagePackInstaller`. |
 
 **Exit codes:** `0` success, `3010` success with a restart needed (any display-language change
-returns this), `1602` GUI closed without installing, `1603` failure.
+returns this), `1602` GUI closed without installing, `1603` failure (also when not run elevated).
 
 **Logs** (CMTrace format):
 - `%windir%\Logs\LanguagePackInstaller\LanguagePackInstaller.log`: main log.
 - `%windir%\Logs\LanguagePackInstaller\LanguagePackInstaller-DISM.log`: DISM detail.
 - `%ProgramData%\LanguagePackInstaller\Logs\User-<username>.log`: per-user steps.
+
+## Uninstalling
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Uninstall-LanguagePack.ps1 -Language de-DE
+```
+
+It removes the language's features and font, its satellite packages for installed Features on Demand, and its
+language pack (last), then `HKLM\SOFTWARE\LanguagePackInstaller\Languages\<tag>`.
+
+- **Refused (1603):** the system display language, the display language this tool set (set another one first,
+  and restart), and the language Windows was installed with. Nothing is removed.
+- **Script fonts** (Japanese, Korean, Chinese, Arabic, Hebrew, Thai) are kept while another installed language uses them.
+- **`BlockCleanupOfUnusedPreinstalledLangPacks`** is removed only when this tool set it and no language it installed
+  is left. `-KeepCleanupPolicy` keeps it.
+- An Active Setup entry that would apply the language to users again is removed.
+- **Not installed** is a success (`0`), so the uninstall can run again.
+- **Per-user language lists are not changed:** a user who added the language keeps the entry until they remove it
+  in Settings > Time & language.
+
+Exit codes: `0` success, `3010` restart needed (removing a language pack usually needs one), `1603` failure or
+refused. It logs to the same `LanguagePackInstaller.log`.
 
 ## Deploying with ConfigMgr
 
@@ -134,6 +164,8 @@ Create an **Application** with a Script Installer deployment type:
 - **GUI version only:** Logon requirement "Only when a user is logged on" and tick **"Allow users
   to view and interact with the program installation"**. Otherwise the form, which runs as
   SYSTEM, is invisible.
+- **Uninstall program:** `powershell.exe -NoProfile -ExecutionPolicy Bypass -File Uninstall-LanguagePack.ps1 -Language xx-XX`
+  (fixed-language apps).
 - **Return codes:** keep the defaults: 3010 is a soft reboot and 1602 is a cancel.
 - **Detection method:** registry key `HKLM\SOFTWARE\LanguagePackInstaller\Languages\<tag>` exists
   (fixed-language app), or `HKLM\SOFTWARE\LanguagePackInstaller\DisplayLanguage` equals `<tag>`.
@@ -161,5 +193,8 @@ PSADT prompts. `Start-ADTProcessAsUser` is a drop-in alternative to the schedule
 ## Status
 
 The repository discovery, CAB matching and FOD-satellite selection have been tested against the
-24H2 LOF listing in `languagecabs.csv`. The DISM, LanguagePackManagement, scheduled-task and
+24H2 LOF listing in `languagecabs.csv`, and on 2026-10-03 against the real `LanguagesAndOptionalFeatures` folder on a
+Windows 11 25H2 PC: all 43 languages (38 full, 5 partial) resolve to their language pack, Basic feature and script
+font, each with 82 FOD satellites, and `New-LanguageRepository.ps1` builds a working repository. The uninstall logic
+is tested with DISM mocked (18 checks, Windows PowerShell 5.1 and 7). The DISM, LanguagePackManagement, scheduled-task and
 WinForms parts still need testing on a real Windows 11 24H2 device. Start on a VM snapshot.

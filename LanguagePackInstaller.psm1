@@ -53,6 +53,8 @@ $script:ExitFailure = 1603
 
 $script:RegistryRoot = 'HKLM:\SOFTWARE\LanguagePackInstaller'
 $script:UserDataRoot = Join-Path -Path $env:ProgramData -ChildPath 'LanguagePackInstaller'
+$script:CleanupPolicyKey = 'HKLM:\SOFTWARE\Policies\Microsoft\Control Panel\International'
+$script:ActiveSetupKey = 'HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\LanguagePackInstaller'
 
 $script:LogFile = $null
 $script:LogDirectory = $null
@@ -433,9 +435,20 @@ function Set-LpiRegistryValue {
 }
 
 function Disable-LpiLanguageCleanup {
-    <# Stops Windows' LPRemove task from removing a language pack that no user has selected yet. #>
-    Set-LpiRegistryValue -Path 'HKLM:\SOFTWARE\Policies\Microsoft\Control Panel\International' `
-        -Name 'BlockCleanupOfUnusedPreinstalledLangPacks' -Value 1 -Type DWord
+    <#
+        Stops Windows' LPRemove task from removing a language pack that no user has selected yet.
+        Records in HKLM\SOFTWARE\LanguagePackInstaller when it set the policy itself (it was not already 1), so
+        Uninstall-LanguagePack.ps1 removes only a policy this installer set, never one set by Group Policy.
+    #>
+    $policyKey = $script:CleanupPolicyKey
+    $current = $null
+    try { $current = (Get-ItemProperty -LiteralPath $policyKey -Name 'BlockCleanupOfUnusedPreinstalledLangPacks' -ErrorAction Stop).BlockCleanupOfUnusedPreinstalledLangPacks } catch { }
+    if ($current -eq 1) {
+        Write-LpiLog -Message 'BlockCleanupOfUnusedPreinstalledLangPacks is already set.'
+        return
+    }
+    Set-LpiRegistryValue -Path $policyKey -Name 'BlockCleanupOfUnusedPreinstalledLangPacks' -Value 1 -Type DWord
+    Set-LpiRegistryValue -Path $script:RegistryRoot -Name 'CleanupPolicySet' -Value 1 -Type DWord
     Write-LpiLog -Message 'Set BlockCleanupOfUnusedPreinstalledLangPacks so Windows does not remove unused language packs.'
 }
 
@@ -531,7 +544,7 @@ function Register-LpiActiveSetup {
     <# Applies the per-user settings once to every other user at their next sign-in. #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Arguments)
-    $key = 'HKLM:\SOFTWARE\Microsoft\Active Setup\Installed Components\LanguagePackInstaller'
+    $key = $script:ActiveSetupKey
     $powershell = Join-Path -Path $env:windir -ChildPath 'System32\WindowsPowerShell\v1.0\powershell.exe'
     Set-LpiRegistryValue -Path $key -Name '(Default)' -Value 'Language Pack Installer - user language settings'
     Set-LpiRegistryValue -Path $key -Name 'StubPath' -Value "`"$powershell`" $Arguments"
@@ -726,6 +739,150 @@ function Invoke-LpiInstall {
 
 #endregion
 
+#region Uninstall
+
+function Get-LpiInstallLanguageTag {
+    <# The language Windows was installed with (Nls InstallLanguage, a hex LCID), as a tag, or $null. #>
+    try {
+        $lcid = (Get-ItemProperty -LiteralPath 'HKLM:\SYSTEM\CurrentControlSet\Control\Nls\Language' -Name 'InstallLanguage' -ErrorAction Stop).InstallLanguage
+        return [Globalization.CultureInfo]::GetCultureInfo([Convert]::ToInt32($lcid, 16)).Name
+    }
+    catch { return $null }
+}
+
+function Remove-LpiEmptyKey {
+    <# Removes a registry key when it holds no values and no subkeys. #>
+    param([Parameter(Mandatory)][string]$Path)
+    $item = Get-Item -LiteralPath $Path -ErrorAction SilentlyContinue
+    if ($item -and $item.ValueCount -eq 0 -and $item.SubKeyCount -eq 0) {
+        Remove-Item -LiteralPath $Path -ErrorAction SilentlyContinue
+        return $true
+    }
+    return $false
+}
+
+function Uninstall-LpiLanguage {
+    <#
+        Removes one language: its language features and font, its satellite packages for installed Features on
+        Demand, then its language pack; then this installer's registry entries for it. Refuses (1603) to remove
+        the system display language, the display language this installer set, or Windows' install language.
+        A language that is not installed is a success (0), so a deployment can run it again.
+        Returns an object with ExitCode (0, 3010 or 1603), RestartNeeded and Message.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Language,
+        [switch]$KeepCleanupPolicy
+    )
+    $tag = ConvertTo-LpiLanguageTag -Language $Language
+    $escaped = [regex]::Escape($tag)
+    $dismLog = Get-LpiDismLogPath
+    $restartNeeded = $false
+    try {
+        Write-LpiLog -Message "Uninstalling $tag."
+
+        # Never remove a language Windows is displaying, or the one it was installed with.
+        $systemUi = $null
+        try { $systemUi = ConvertTo-LpiLanguageTag -Language "$(Get-SystemPreferredUILanguage -ErrorAction Stop)" } catch { }
+        if ($systemUi -eq $tag) { throw "$tag is the system display language. Set another display language first (and restart), then uninstall $tag." }
+        $setDisplay = $null
+        try { $setDisplay = (Get-ItemProperty -LiteralPath $script:RegistryRoot -Name 'DisplayLanguage' -ErrorAction Stop).DisplayLanguage } catch { }
+        if ($setDisplay -and (ConvertTo-LpiLanguageTag -Language $setDisplay) -eq $tag) { throw "$tag was set as the display language by this installer. Install and set another display language first, then uninstall $tag." }
+        $installLanguage = Get-LpiInstallLanguageTag
+        if ($installLanguage -eq $tag) { throw "$tag is the language Windows was installed with; it cannot be removed." }
+
+        # 1. Language features and the script font (the font only when no other installed language uses it).
+        $capabilities = @(Get-WindowsCapability -Online -ErrorAction Stop | Where-Object {
+                "$($_.State)" -eq 'Installed' -and $_.Name -match "^Language\.(Basic|OCR|Handwriting|TextToSpeech|Speech)~~~$escaped~"
+            })
+        $fontScript = $script:FontScripts[$tag]
+        if ($fontScript) {
+            $others = @(Get-LpiInstalledLanguageTag | Where-Object { $_ -ne $tag -and $script:FontScripts[$_] -eq $fontScript })
+            $fontName = "Language.Fonts.$fontScript~~~und-$($fontScript.ToUpper())~0.0.1.0"
+            if ($others) { Write-LpiLog -Message "Keeping ${fontName}: also used by $($others -join ', ')." }
+            else {
+                $font = @(Get-WindowsCapability -Online -Name $fontName -ErrorAction SilentlyContinue | Where-Object { "$($_.State)" -eq 'Installed' })
+                $capabilities += $font
+            }
+        }
+        foreach ($capability in $capabilities) {
+            Write-LpiLog -Message "Removing $($capability.Name)"
+            try {
+                $result = Remove-WindowsCapability -Online -Name $capability.Name -LogPath $dismLog -ErrorAction Stop
+                if (Test-LpiRestartNeeded -Result $result) { $restartNeeded = $true }
+            }
+            catch { Write-LpiLog -Level Warning -Message "Could not remove $($capability.Name): $($_.Exception.Message)" }
+        }
+
+        # 2. Satellite packages, then the language pack (re-read: removing capabilities removes some packages).
+        $packages = @(Get-LpiInstalledPackage -Refresh | Where-Object { $_.PackageName -match "(?i)~$escaped~" })
+        $languagePacks = @($packages | Where-Object { $_.PackageName -match '^Microsoft-Windows-(Client|Lip)-LanguagePack-Package~' })
+        $satellites = @($packages | Where-Object { $languagePacks -notcontains $_ })
+        if (-not $capabilities -and -not $packages) {
+            Write-LpiLog -Message "$tag is not installed; nothing to remove."
+        }
+        foreach ($package in @($satellites) + @($languagePacks)) {
+            Write-LpiLog -Message "Removing $($package.PackageName)"
+            try {
+                $result = Remove-WindowsPackage -Online -PackageName $package.PackageName -NoRestart -LogPath $dismLog -ErrorAction Stop
+                if (Test-LpiRestartNeeded -Result $result) { $restartNeeded = $true }
+            }
+            catch {
+                # The language pack itself must go; a satellite that will not is reported and left.
+                if ($languagePacks -contains $package) { throw }
+                Write-LpiLog -Level Warning -Message "Could not remove $($package.PackageName): $($_.Exception.Message)"
+            }
+        }
+
+        # 3. This installer's registry entries: the language's marker, then the cleanup policy if this installer
+        #    set it and no language it installed is left, then its key if empty.
+        $marker = Join-Path -Path $script:RegistryRoot -ChildPath "Languages\$tag"
+        if (Test-Path -LiteralPath $marker) { Remove-Item -LiteralPath $marker -Recurse -Force; Write-LpiLog -Message "Removed $marker." }
+        [void](Remove-LpiEmptyKey -Path (Join-Path -Path $script:RegistryRoot -ChildPath 'Languages'))
+        $remaining = @(Get-ChildItem -LiteralPath (Join-Path -Path $script:RegistryRoot -ChildPath 'Languages') -ErrorAction SilentlyContinue)
+        $policySetByUs = $false
+        try { $policySetByUs = [bool](Get-ItemProperty -LiteralPath $script:RegistryRoot -Name 'CleanupPolicySet' -ErrorAction Stop).CleanupPolicySet } catch { }
+        if ($policySetByUs -and -not $remaining -and -not $KeepCleanupPolicy) {
+            $policyKey = $script:CleanupPolicyKey
+            Remove-ItemProperty -LiteralPath $policyKey -Name 'BlockCleanupOfUnusedPreinstalledLangPacks' -ErrorAction SilentlyContinue
+            Remove-ItemProperty -LiteralPath $script:RegistryRoot -Name 'CleanupPolicySet' -ErrorAction SilentlyContinue
+            foreach ($key in @($policyKey, (Split-Path -Path $policyKey -Parent))) { [void](Remove-LpiEmptyKey -Path $key) }
+            Write-LpiLog -Message 'Removed BlockCleanupOfUnusedPreinstalledLangPacks: this installer set it and no language it installed is left.'
+        }
+        elseif ($remaining) {
+            Write-LpiLog -Message "Kept BlockCleanupOfUnusedPreinstalledLangPacks: languages installed by this installer remain ($(@($remaining | ForEach-Object { $_.PSChildName }) -join ', '))."
+        }
+        [void](Remove-LpiEmptyKey -Path $script:RegistryRoot)
+
+        # Per-user Active Setup left for this language (from an earlier display-language install) would add it again.
+        $activeSetup = $script:ActiveSetupKey
+        $stub = $null
+        try { $stub = (Get-ItemProperty -LiteralPath $activeSetup -Name 'StubPath' -ErrorAction Stop).StubPath } catch { }
+        if ($stub -and $stub -match "-Language $escaped(\s|$)") {
+            Remove-Item -LiteralPath $activeSetup -Recurse -Force
+            Write-LpiLog -Message "Removed the Active Setup entry that applied $tag to users."
+        }
+
+        $left = @(Get-LpiInstalledPackage -Refresh | Where-Object { $_.PackageName -match "(?i)~$escaped~" })
+        if ($left) {
+            $restartNeeded = $true
+            Write-LpiLog -Message "$($left.Count) $tag package(s) are still installed or pending; the restart finishes removing them."
+        }
+        $exitCode = $script:ExitSuccess
+        $message = "$tag was uninstalled."
+        if ($restartNeeded) { $exitCode = $script:ExitReboot; $message = "$tag was uninstalled. Restart the device to finish." }
+        Write-LpiLog -Message "$message Exit code $exitCode."
+        Write-LpiLog -Message "Users who had $tag in their own language list keep the entry until they remove it in Settings > Time & language."
+        return [pscustomobject]@{ ExitCode = $exitCode; RestartNeeded = $restartNeeded; Message = $message }
+    }
+    catch {
+        Write-LpiLog -Level Error -Message "Uninstalling $tag failed: $($_.Exception.Message)"
+        return [pscustomobject]@{ ExitCode = $script:ExitFailure; RestartNeeded = $restartNeeded; Message = $_.Exception.Message }
+    }
+}
+
+#endregion
+
 Export-ModuleMember -Function @(
     'Initialize-LpiLog'
     'Write-LpiLog'
@@ -736,4 +893,5 @@ Export-ModuleMember -Function @(
     'Test-LpiAdministrator'
     'Test-LpiPrerequisite'
     'Invoke-LpiInstall'
+    'Uninstall-LpiLanguage'
 )
