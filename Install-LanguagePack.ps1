@@ -109,6 +109,20 @@ Write-LpiLog -Message "===== Windows 11 Language Installer started as $([Securit
 
 #region GUI
 
+function Enable-DpiAwareness {
+    <#
+        Makes this process DPI-aware before any window is created (TODO item 2), so on a high-resolution screen with
+        scaling Windows does not stretch the window as a bitmap (blurry text); the form scales its own layout instead.
+    #>
+    try {
+        if (-not ('LanguagePackInstaller.Dpi' -as [type])) {
+            Add-Type -Namespace LanguagePackInstaller -Name Dpi -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetProcessDPIAware();' -ErrorAction Stop
+        }
+        [void][LanguagePackInstaller.Dpi]::SetProcessDPIAware()
+    }
+    catch { }
+}
+
 function Confirm-UninstallChoice {
     <# Asked when "Uninstall this language" is ticked: a restart is required (and the display language is reset). #>
     param($Owner, [Parameter(Mandatory)]$Entry, [bool]$IsDisplayLanguage, [string]$DefaultLanguage)
@@ -137,29 +151,74 @@ function Show-InstallerForm {
     $state = @{ PowerShell = $null; Handle = $null; ExitCode = $null; Running = $false; Index = -1; Mode = $null; Confirming = $false }
     $queue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'
 
+    # Look (TODO item 2, 2026-10-04): easier to read on a large, high-resolution screen - fixed colours (the window runs
+    # as SYSTEM, so it should not depend on a user's theme), larger fonts, and layout in 96-DPI units that the form
+    # scales to the screen's DPI (AutoScaleMode Dpi; the process is made DPI-aware by Enable-DpiAwareness).
+    $rgb = { param([string]$Html) [System.Drawing.ColorTranslator]::FromHtml($Html) }
+    $colors = @{
+        Back = & $rgb '#F3F4F6'; Panel = & $rgb '#FFFFFF'; Text = & $rgb '#111827'; Hint = & $rgb '#4B5563'
+        Line = & $rgb '#D1D5DB'; Accent = & $rgb '#0F6CBD'; AccentDown = & $rgb '#0C5598'; Border = & $rgb '#9CA3AF'
+    }
+    $fontMain = New-Object System.Drawing.Font('Segoe UI', 11)
+    $fontHint = New-Object System.Drawing.Font('Segoe UI', 10)
+    $fontButton = New-Object System.Drawing.Font('Segoe UI Semibold', 11)
+    $point = { param([int]$X, [int]$Y) New-Object System.Drawing.Point($X, $Y) }
+    $size = { param([int]$W, [int]$H) New-Object System.Drawing.Size($W, $H) }
+
     $form = New-Object System.Windows.Forms.Form
+    $form.SuspendLayout()
+    $form.AutoScaleDimensions = New-Object System.Drawing.SizeF(96, 96)
+    $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
     $form.Text = 'Windows 11 Language Installer'
-    $form.ClientSize = New-Object System.Drawing.Size(560, 470)
+    $form.ClientSize = & $size 680 604
     $form.StartPosition = 'CenterScreen'
     $form.FormBorderStyle = 'FixedDialog'
     $form.MaximizeBox = $false
     $form.MinimizeBox = $false
     $form.TopMost = $true
-    $form.Font = New-Object System.Drawing.Font('Segoe UI', 9)
+    $form.Font = $fontMain
+    $form.BackColor = $colors.Back
+    $form.ForeColor = $colors.Text
+
+    $header = New-Object System.Windows.Forms.Panel
+    $header.Location = & $point 0 0
+    $header.Size = & $size 680 72
+    $header.BackColor = $colors.Panel
+    $form.Controls.Add($header)
+    $title = New-Object System.Windows.Forms.Label
+    $title.Text = 'Windows 11 Language Installer'
+    $title.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 15)
+    $title.Location = & $point 18 10
+    $title.AutoSize = $true
+    $header.Controls.Add($title)
+    $subtitle = New-Object System.Windows.Forms.Label
+    $subtitle.Text = 'Install a language from the language repository, or uninstall one.'
+    $subtitle.Font = $fontHint
+    $subtitle.ForeColor = $colors.Hint
+    $subtitle.Location = & $point 20 44
+    $subtitle.AutoSize = $true
+    $header.Controls.Add($subtitle)
+    $headerLine = New-Object System.Windows.Forms.Panel
+    $headerLine.Location = & $point 0 72
+    $headerLine.Size = & $size 680 1
+    $headerLine.BackColor = $colors.Line
+    $form.Controls.Add($headerLine)
 
     $labelLanguage = New-Object System.Windows.Forms.Label
-    $labelLanguage.Text = 'Language:'
-    $labelLanguage.Location = New-Object System.Drawing.Point(12, 14)
+    $labelLanguage.Text = 'Language'
+    $labelLanguage.Location = & $point 18 88
     $labelLanguage.AutoSize = $true
     $form.Controls.Add($labelLanguage)
 
     $comboLanguage = New-Object System.Windows.Forms.ComboBox
+    $comboLanguage.Name = 'LanguageList'
     $comboLanguage.DropDownStyle = 'DropDownList'
-    $comboLanguage.Location = New-Object System.Drawing.Point(12, 34)
-    $comboLanguage.Size = New-Object System.Drawing.Size(536, 24)
+    $comboLanguage.Location = & $point 20 114
+    $comboLanguage.Size = & $size 640 30
     $comboLanguage.MaxDropDownItems = 20
+    $comboLanguage.BackColor = $colors.Panel
+    $comboLanguage.ForeColor = $colors.Text
     $form.Controls.Add($comboLanguage)
-
     $formatItem = {
         param($Entry)
         $text = '{0} - {1}  ({2})' -f $Entry.DisplayName, $Entry.NativeName, $Entry.Tag
@@ -176,22 +235,25 @@ function Show-InstallerForm {
     }
 
     $checkDisplay = New-Object System.Windows.Forms.CheckBox
+    $checkDisplay.Name = 'DisplayLanguage'
     $checkDisplay.Text = 'Set as display language'
-    $checkDisplay.Location = New-Object System.Drawing.Point(12, 70)
+    $checkDisplay.Location = & $point 20 160
     $checkDisplay.AutoSize = $true
     $checkDisplay.Checked = [bool]$BaseParameters['SetDisplayLanguage']
     $form.Controls.Add($checkDisplay)
 
     $labelDisplay = New-Object System.Windows.Forms.Label
     $labelDisplay.Text = 'Applies to the signed-in user, the Welcome screen and new user accounts. Takes effect after sign-out or restart.'
-    $labelDisplay.Location = New-Object System.Drawing.Point(30, 92)
-    $labelDisplay.Size = New-Object System.Drawing.Size(518, 32)
-    $labelDisplay.ForeColor = [System.Drawing.SystemColors]::GrayText
+    $labelDisplay.Location = & $point 42 190
+    $labelDisplay.Size = & $size 618 42
+    $labelDisplay.Font = $fontHint
+    $labelDisplay.ForeColor = $colors.Hint
     $form.Controls.Add($labelDisplay)
 
     $checkRegional = New-Object System.Windows.Forms.CheckBox
+    $checkRegional.Name = 'RegionalFormat'
     $checkRegional.Text = 'Also set regional format and country/region'
-    $checkRegional.Location = New-Object System.Drawing.Point(30, 126)
+    $checkRegional.Location = & $point 40 236
     $checkRegional.AutoSize = $true
     $checkRegional.Checked = [bool]$BaseParameters['SetRegionalFormat']
     $checkRegional.Enabled = $checkDisplay.Checked
@@ -199,49 +261,73 @@ function Show-InstallerForm {
 
     # Shown when the selected language is installed (TODO item 1, 2026-10-04): uninstall it instead of installing.
     $checkUninstall = New-Object System.Windows.Forms.CheckBox
+    $checkUninstall.Name = 'Uninstall'
     $checkUninstall.Text = 'Uninstall this language'
-    $checkUninstall.Location = New-Object System.Drawing.Point(12, 156)
+    $checkUninstall.Location = & $point 20 278
     $checkUninstall.AutoSize = $true
     $checkUninstall.Visible = $false
     $form.Controls.Add($checkUninstall)
 
     $labelUninstall = New-Object System.Windows.Forms.Label
-    $labelUninstall.Location = New-Object System.Drawing.Point(200, 158)
-    $labelUninstall.Size = New-Object System.Drawing.Size(348, 20)
-    $labelUninstall.ForeColor = [System.Drawing.SystemColors]::GrayText
+    $labelUninstall.Name = 'UninstallReason'
+    $labelUninstall.Location = & $point 240 281
+    $labelUninstall.Size = & $size 420 24
+    $labelUninstall.Font = $fontHint
+    $labelUninstall.ForeColor = $colors.Hint
     $form.Controls.Add($labelUninstall)
 
     $textLog = New-Object System.Windows.Forms.TextBox
+    $textLog.Name = 'Log'
     $textLog.Multiline = $true
     $textLog.ReadOnly = $true
     $textLog.ScrollBars = 'Vertical'
     $textLog.WordWrap = $true
-    $textLog.Location = New-Object System.Drawing.Point(12, 188)
-    $textLog.Size = New-Object System.Drawing.Size(536, 210)
-    $textLog.Font = New-Object System.Drawing.Font('Consolas', 8.5)
-    $textLog.BackColor = [System.Drawing.SystemColors]::Window
+    $textLog.Location = & $point 20 318
+    $textLog.Size = & $size 640 206
+    $textLog.Font = New-Object System.Drawing.Font('Consolas', 10.5)
+    $textLog.BackColor = $colors.Panel
+    $textLog.ForeColor = $colors.Text
+    $textLog.BorderStyle = 'FixedSingle'
     $form.Controls.Add($textLog)
 
     $progress = New-Object System.Windows.Forms.ProgressBar
-    $progress.Location = New-Object System.Drawing.Point(12, 406)
-    $progress.Size = New-Object System.Drawing.Size(536, 12)
+    $progress.Location = & $point 20 534
+    $progress.Size = & $size 640 10
     $progress.Style = 'Blocks'
     $form.Controls.Add($progress)
 
     $buttonInstall = New-Object System.Windows.Forms.Button
+    $buttonInstall.Name = 'Install'
     $buttonInstall.Text = 'Install'
-    $buttonInstall.Location = New-Object System.Drawing.Point(366, 432)
-    $buttonInstall.Size = New-Object System.Drawing.Size(88, 28)
+    $buttonInstall.Location = & $point 432 556
+    $buttonInstall.Size = & $size 110 36
+    $buttonInstall.Font = $fontButton
+    $buttonInstall.FlatStyle = 'Flat'
+    $buttonInstall.FlatAppearance.BorderSize = 0
+    $buttonInstall.FlatAppearance.MouseOverBackColor = $colors.AccentDown
+    $buttonInstall.FlatAppearance.MouseDownBackColor = $colors.AccentDown
+    $buttonInstall.BackColor = $colors.Accent
+    $buttonInstall.ForeColor = $colors.Panel
     $form.Controls.Add($buttonInstall)
     $form.AcceptButton = $buttonInstall
+    # A disabled flat button keeps its blue with grey text, which is hard to read: light grey while busy instead.
+    $buttonInstall.Add_EnabledChanged({ $buttonInstall.BackColor = $(if ($buttonInstall.Enabled) { $colors.Accent } else { $colors.Line }) })
 
     $buttonClose = New-Object System.Windows.Forms.Button
+    $buttonClose.Name = 'Close'
     $buttonClose.Text = 'Close'
-    $buttonClose.Location = New-Object System.Drawing.Point(460, 432)
-    $buttonClose.Size = New-Object System.Drawing.Size(88, 28)
+    $buttonClose.Location = & $point 550 556
+    $buttonClose.Size = & $size 110 36
+    $buttonClose.Font = $fontMain
+    $buttonClose.FlatStyle = 'Flat'
+    $buttonClose.FlatAppearance.BorderColor = $colors.Border
+    $buttonClose.BackColor = $colors.Panel
+    $buttonClose.ForeColor = $colors.Text
     $buttonClose.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $form.Controls.Add($buttonClose)
     $form.CancelButton = $buttonClose
+    $form.ResumeLayout($false)
+    $form.PerformLayout()
 
     $setBusy = {
         param([bool]$Busy)
@@ -436,6 +522,9 @@ function Show-InstallerForm {
 }
 
 #endregion
+
+# Before any window (the problem message box below, or the form): sharp text on high-resolution screens.
+if (-not $Silent) { Enable-DpiAwareness }
 
 $problems = @(Test-LpiPrerequisite -Repository $Repository -UserScriptPath $UserScriptPath)
 if ($problems.Count -gt 0) {

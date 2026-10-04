@@ -18,6 +18,10 @@ required, and if the language is the display language it is set back to the defa
 installed with) before it is removed. The button then reads **Uninstall**. The language Windows was installed with
 is shown greyed out: it cannot be removed.
 
+The window is built for large, high-resolution screens: it is DPI-aware (sharp text at 125-200 % scaling instead
+of a stretched bitmap), uses Segoe UI 11 pt (Consolas 10.5 pt in the log), and has fixed high-contrast colours
+that do not depend on the user's theme (it may run as SYSTEM in the user's session).
+
 | File | Purpose |
 |---|---|
 | `Install-LanguagePack.ps1` | Entry point. GUI (language drop-down, "Set as display language") or `-Silent`. |

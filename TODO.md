@@ -5,7 +5,7 @@ Last updated: 2026-10-04.
 | # | Item | Status |
 |---|------|--------|
 | [1](#1) | GUI: uninstall an installed language from the window (and reset the display language to the default) | Built 2026-10-04 (mock-tested; the check box tested on the real form); test on a VM |
-| [2](#2) | GUI: easier-to-read colours and larger fonts for large, high-resolution screens | Not started |
+| [2](#2) | GUI: easier-to-read colours and larger fonts for large, high-resolution screens | Built 2026-10-04 (tested on the real form at 100 %, 150 %/200 % simulated); check on a scaled screen |
 | [3](#3) | Real tests still open: the corrected uninstall, a run as SYSTEM from ConfigMgr, the display-language path | Open |
 | [4](#4) | Feature-only languages (en-AU, de-CH, zh-HK, ...) cannot be added | Idea |
 
@@ -41,7 +41,14 @@ Last updated: 2026-10-04.
 <a id="2"></a>
 ## 2. GUI: easier-to-read colours and larger fonts
 
-**Asked 2026-10-04.** Assume a large, high-resolution screen.
+**Asked 2026-10-04.** Assume a large, high-resolution screen. **Built 2026-10-04**; still to see on a real 150 %/200 % screen (the test PC is 3440x1440 at 100 %).
+
+**Built:**
+- `Enable-DpiAwareness` (`SetProcessDPIAware`) before any window, `AutoScaleMode = Dpi` (designed at 96 DPI).
+- Fixed colours: background `#F3F4F6`, white header / fields / log, text `#111827`, hints `#4B5563`, flat blue main button `#0F6CBD` with white text (light grey `#D1D5DB` while busy), flat white Close button with a grey border.
+- Fonts: Segoe UI 11 pt (hints 10 pt), title Segoe UI Semibold 15 pt, log Consolas 10.5 pt. Window 680x604 with a header ("Install a language from the language repository, or uninstall one.").
+- Controls named (`LanguageList`, `DisplayLanguage`, `Uninstall`, `UninstallReason`, `Log`, `Install`, `Close`).
+- Tests: `Test-Gui.ps1` now 13 checks (fonts, colours, the busy button colour, DPI setup, no overlap or clipping at 100 % and simulated 150 %/200 %), PS 5.1 and 7. Screenshot retaken.
 
 **Wanted:**
 - Colours that are easier to read: clear contrast between text, input fields, the log box and the buttons (for example dark text on white fields over a light neutral background, one accent colour for the main button, a clearly readable log box).
@@ -72,5 +79,6 @@ The Languages and Optional Features media has 92 language variants with language
 
 ## Done
 
+- 2026-10-04: item 2 built - DPI-aware window, larger fonts, fixed high-contrast colours; README screenshot retaken.
 - 2026-10-04: item 1 built - uninstall from the window, with the display language set back to the default first (`-ResetDisplayLanguage`); README screenshot retaken. Windows allows, final check, refusals, cleanup policy only when this tool set it); administrator checks removed (runs as SYSTEM); `New-LanguageRepository.ps1` takes several languages from `powershell.exe -File`; README screenshot; merged to `main` (#2, #3).
 - 2026-10-03: validated against the real `LanguagesAndOptionalFeatures` folder on Windows 11 25H2 (43 languages, 82 FOD satellites each).
