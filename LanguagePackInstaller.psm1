@@ -761,6 +761,20 @@ function Remove-LpiEmptyKey {
     return $false
 }
 
+function Remove-LpiCapability {
+    <# Removes one capability, logging the result; returns $true when DISM reports that a restart is needed. #>
+    param([Parameter(Mandatory)][string]$Name)
+    Write-LpiLog -Message "Removing $Name"
+    try {
+        $result = Remove-WindowsCapability -Online -Name $Name -LogPath (Get-LpiDismLogPath) -ErrorAction Stop
+        return (Test-LpiRestartNeeded -Result $result)
+    }
+    catch {
+        Write-LpiLog -Level Warning -Message "Could not remove ${Name}: $($_.Exception.Message)"
+        return $false
+    }
+}
+
 function Uninstall-LpiLanguage {
     <#
         Removes one language: its language features and font, its satellite packages for installed Features on
@@ -791,47 +805,61 @@ function Uninstall-LpiLanguage {
         $installLanguage = Get-LpiInstallLanguageTag
         if ($installLanguage -eq $tag) { throw "$tag is the language Windows was installed with; it cannot be removed." }
 
-        # 1. Language features and the script font (the font only when no other installed language uses it).
-        $capabilities = @(Get-WindowsCapability -Online -ErrorAction Stop | Where-Object {
-                "$($_.State)" -eq 'Installed' -and $_.Name -match "^Language\.(Basic|OCR|Handwriting|TextToSpeech|Speech)~~~$escaped~"
-            })
+        # The removal order matters (real test on Windows 11 25H2, 2026-10-04): Language.Basic is a permanent package
+        # while the language pack is installed (0x800f0825), and the language pack's own localised parts (Notepad,
+        # Media Player, ...) cannot be removed on their own - they go with the language pack. So: the other features,
+        # then the language pack, then whatever of this language is still installed (satellites added on their own),
+        # then Basic and the font, then a check that nothing is left.
+        $featurePattern = "^Language\.(Basic|OCR|Handwriting|TextToSpeech|Speech)~~~$escaped~"
+        $capabilities = @(Get-WindowsCapability -Online -ErrorAction Stop | Where-Object { "$($_.State)" -eq 'Installed' -and $_.Name -match $featurePattern })
+        $basic = @($capabilities | Where-Object { $_.Name -like 'Language.Basic~*' })
+        $features = @($capabilities | Where-Object { $_.Name -notlike 'Language.Basic~*' })
+        $font = @()
         $fontScript = $script:FontScripts[$tag]
         if ($fontScript) {
             $others = @(Get-LpiInstalledLanguageTag | Where-Object { $_ -ne $tag -and $script:FontScripts[$_] -eq $fontScript })
             $fontName = "Language.Fonts.$fontScript~~~und-$($fontScript.ToUpper())~0.0.1.0"
             if ($others) { Write-LpiLog -Message "Keeping ${fontName}: also used by $($others -join ', ')." }
-            else {
-                $font = @(Get-WindowsCapability -Online -Name $fontName -ErrorAction SilentlyContinue | Where-Object { "$($_.State)" -eq 'Installed' })
-                $capabilities += $font
-            }
+            else { $font = @(Get-WindowsCapability -Online -Name $fontName -ErrorAction SilentlyContinue | Where-Object { "$($_.State)" -eq 'Installed' }) }
         }
-        foreach ($capability in $capabilities) {
-            Write-LpiLog -Message "Removing $($capability.Name)"
-            try {
-                $result = Remove-WindowsCapability -Online -Name $capability.Name -LogPath $dismLog -ErrorAction Stop
-                if (Test-LpiRestartNeeded -Result $result) { $restartNeeded = $true }
-            }
-            catch { Write-LpiLog -Level Warning -Message "Could not remove $($capability.Name): $($_.Exception.Message)" }
-        }
-
-        # 2. Satellite packages, then the language pack (re-read: removing capabilities removes some packages).
         $packages = @(Get-LpiInstalledPackage -Refresh | Where-Object { $_.PackageName -match "(?i)~$escaped~" })
         $languagePacks = @($packages | Where-Object { $_.PackageName -match '^Microsoft-Windows-(Client|Lip)-LanguagePack-Package~' })
-        $satellites = @($packages | Where-Object { $languagePacks -notcontains $_ })
-        if (-not $capabilities -and -not $packages) {
+        if (-not $capabilities -and -not $packages -and -not $font) {
             Write-LpiLog -Message "$tag is not installed; nothing to remove."
         }
-        foreach ($package in @($satellites) + @($languagePacks)) {
+
+        # 1. The features that depend on Basic.
+        foreach ($capability in $features) { if (Remove-LpiCapability -Name $capability.Name) { $restartNeeded = $true } }
+
+        # 2. The language pack: it takes its own localised parts with it. It must go.
+        foreach ($package in $languagePacks) {
+            Write-LpiLog -Message "Removing $($package.PackageName)"
+            $result = Remove-WindowsPackage -Online -PackageName $package.PackageName -NoRestart -LogPath $dismLog -ErrorAction Stop
+            if (Test-LpiRestartNeeded -Result $result) { $restartNeeded = $true }
+        }
+
+        # 3. What is still installed of this language now: satellites that were added on their own.
+        $rest = @(Get-LpiInstalledPackage -Refresh | Where-Object { $_.PackageName -match "(?i)~$escaped~" -and $_.PackageName -notmatch '^Microsoft-Windows-(Client|Lip)-LanguagePack-Package~' })
+        foreach ($package in $rest) {
             Write-LpiLog -Message "Removing $($package.PackageName)"
             try {
                 $result = Remove-WindowsPackage -Online -PackageName $package.PackageName -NoRestart -LogPath $dismLog -ErrorAction Stop
                 if (Test-LpiRestartNeeded -Result $result) { $restartNeeded = $true }
             }
-            catch {
-                # The language pack itself must go; a satellite that will not is reported and left.
-                if ($languagePacks -contains $package) { throw }
-                Write-LpiLog -Level Warning -Message "Could not remove $($package.PackageName): $($_.Exception.Message)"
-            }
+            catch { Write-LpiLog -Level Warning -Message "Could not remove $($package.PackageName): $($_.Exception.Message)" }
+        }
+
+        # 4. Basic and the font, now that nothing depends on them.
+        foreach ($capability in @($basic) + @($font)) { if (Remove-LpiCapability -Name $capability.Name) { $restartNeeded = $true } }
+
+        # 5. Nothing of this language may be left installed; otherwise fail and keep the registry entry, so a
+        #    deployment still sees the language as installed. (Removals waiting for the restart do not count.)
+        $leftCapabilities = @(Get-WindowsCapability -Online -ErrorAction Stop | Where-Object {
+                "$($_.State)" -eq 'Installed' -and ($_.Name -match $featurePattern -or @($font | ForEach-Object { $_.Name }) -contains $_.Name)
+            })
+        $leftPackages = @(Get-LpiInstalledPackage -Refresh | Where-Object { $_.PackageName -match "(?i)~$escaped~" -and "$($_.PackageState)" -eq 'Installed' })
+        if ($leftCapabilities -or $leftPackages) {
+            throw "$tag was not removed completely; still installed: $(@(@($leftCapabilities | ForEach-Object { $_.Name }) + @($leftPackages | ForEach-Object { $_.PackageName })) -join ', '). The registry entry is kept, so a deployment still sees $tag as installed. Restart and run the uninstall again; see the DISM log."
         }
 
         # 3. This installer's registry entries: the language's marker, then the cleanup policy if this installer
@@ -863,11 +891,6 @@ function Uninstall-LpiLanguage {
             Write-LpiLog -Message "Removed the Active Setup entry that applied $tag to users."
         }
 
-        $left = @(Get-LpiInstalledPackage -Refresh | Where-Object { $_.PackageName -match "(?i)~$escaped~" })
-        if ($left) {
-            $restartNeeded = $true
-            Write-LpiLog -Message "$($left.Count) $tag package(s) are still installed or pending; the restart finishes removing them."
-        }
         $exitCode = $script:ExitSuccess
         $message = "$tag was uninstalled."
         if ($restartNeeded) { $exitCode = $script:ExitReboot; $message = "$tag was uninstalled. Restart the device to finish." }

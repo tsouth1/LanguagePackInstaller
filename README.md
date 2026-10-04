@@ -138,8 +138,14 @@ returns this), `1602` GUI closed without installing, `1603` failure (also when n
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Uninstall-LanguagePack.ps1 -Language de-DE
 ```
 
-It removes the language's features and font, its satellite packages for installed Features on Demand, and its
-language pack (last), then `HKLM\SOFTWARE\LanguagePackInstaller\Languages\<tag>`.
+It removes, in this order: the language features that depend on Basic (OCR, Handwriting, TextToSpeech, Speech);
+the language pack, which takes its own localised parts (Notepad, Media Player, ...) with it; any satellite package
+of the language that is still installed; then Basic and the script font, which Windows treats as permanent while the
+language pack is installed. Then it checks that nothing of the language is left, and removes
+`HKLM\SOFTWARE\LanguagePackInstaller\Languages\<tag>`.
+
+- **Not removed completely (1603):** if anything of the language is still installed at the end, it is named in the log,
+  and the registry entry is kept, so a deployment still sees the language as installed. Restart and run it again.
 
 - **Refused (1603):** the system display language, the display language this tool set (set another one first,
   and restart), and the language Windows was installed with. Nothing is removed.
@@ -196,5 +202,11 @@ The repository discovery, CAB matching and FOD-satellite selection have been tes
 24H2 LOF listing in `languagecabs.csv`, and on 2026-10-03 against the real `LanguagesAndOptionalFeatures` folder on a
 Windows 11 25H2 PC: all 43 languages (38 full, 5 partial) resolve to their language pack, Basic feature and script
 font, each with 82 FOD satellites, and `New-LanguageRepository.ps1` builds a working repository. The uninstall logic
-is tested with DISM mocked (18 checks, Windows PowerShell 5.1 and 7). The DISM, LanguagePackManagement, scheduled-task and
-WinForms parts still need testing on a real Windows 11 24H2 device. Start on a VM snapshot.
+is tested with DISM mocked (20 checks, Windows PowerShell 5.1 and 7).
+
+On 2026-10-04 a real install and uninstall of de-DE on that Windows 11 25H2 PC: the GUI opened and closed (1602);
+`-Silent` installed the language pack and its five features in about 3.5 minutes (exit 0). The first version of the
+uninstall removed the language pack but left `Language.Basic` installed (permanent while the language pack was
+installed) and reported success; that led to the removal order and the final check above.
+
+The display-language, scheduled-task and Active Setup parts still need testing on a real device. Start on a VM snapshot.
