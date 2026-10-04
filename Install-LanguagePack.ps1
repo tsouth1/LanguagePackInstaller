@@ -109,23 +109,37 @@ Write-LpiLog -Message "===== Windows 11 Language Installer started as $([Securit
 
 #region GUI
 
+function Confirm-UninstallChoice {
+    <# Asked when "Uninstall this language" is ticked: a restart is required (and the display language is reset). #>
+    param($Owner, [Parameter(Mandatory)]$Entry, [bool]$IsDisplayLanguage, [string]$DefaultLanguage)
+    $text = "Uninstalling $($Entry.DisplayName) ($($Entry.Tag)) requires a restart to finish."
+    if ($IsDisplayLanguage) {
+        $text += [Environment]::NewLine + [Environment]::NewLine + "$($Entry.Tag) is the display language now. It is first set back to the default, $DefaultLanguage, for the system, the Welcome screen, new users and the signed-in users."
+    }
+    $text += [Environment]::NewLine + [Environment]::NewLine + 'Continue?'
+    $answer = [System.Windows.Forms.MessageBox]::Show($Owner, $text, 'Windows 11 Language Installer', 'OKCancel', 'Warning')
+    return ($answer -eq [System.Windows.Forms.DialogResult]::OK)
+}
+
 function Show-InstallerForm {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][object[]]$Languages,
         [Parameter(Mandatory)][hashtable]$BaseParameters,
-        [string]$Preselect
+        [string]$Preselect,
+        # the language Windows was installed with: never offered for uninstall
+        [string]$InstallLanguage
     )
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
     [System.Windows.Forms.Application]::EnableVisualStyles()
 
-    $state = @{ PowerShell = $null; Handle = $null; ExitCode = $null; Running = $false; Index = -1 }
+    $state = @{ PowerShell = $null; Handle = $null; ExitCode = $null; Running = $false; Index = -1; Mode = $null; Confirming = $false }
     $queue = New-Object 'System.Collections.Concurrent.ConcurrentQueue[string]'
 
     $form = New-Object System.Windows.Forms.Form
     $form.Text = 'Windows 11 Language Installer'
-    $form.ClientSize = New-Object System.Drawing.Size(560, 440)
+    $form.ClientSize = New-Object System.Drawing.Size(560, 470)
     $form.StartPosition = 'CenterScreen'
     $form.FormBorderStyle = 'FixedDialog'
     $form.MaximizeBox = $false
@@ -183,33 +197,47 @@ function Show-InstallerForm {
     $checkRegional.Enabled = $checkDisplay.Checked
     $form.Controls.Add($checkRegional)
 
+    # Shown when the selected language is installed (TODO item 1, 2026-10-04): uninstall it instead of installing.
+    $checkUninstall = New-Object System.Windows.Forms.CheckBox
+    $checkUninstall.Text = 'Uninstall this language'
+    $checkUninstall.Location = New-Object System.Drawing.Point(12, 156)
+    $checkUninstall.AutoSize = $true
+    $checkUninstall.Visible = $false
+    $form.Controls.Add($checkUninstall)
+
+    $labelUninstall = New-Object System.Windows.Forms.Label
+    $labelUninstall.Location = New-Object System.Drawing.Point(200, 158)
+    $labelUninstall.Size = New-Object System.Drawing.Size(348, 20)
+    $labelUninstall.ForeColor = [System.Drawing.SystemColors]::GrayText
+    $form.Controls.Add($labelUninstall)
+
     $textLog = New-Object System.Windows.Forms.TextBox
     $textLog.Multiline = $true
     $textLog.ReadOnly = $true
     $textLog.ScrollBars = 'Vertical'
     $textLog.WordWrap = $true
-    $textLog.Location = New-Object System.Drawing.Point(12, 158)
+    $textLog.Location = New-Object System.Drawing.Point(12, 188)
     $textLog.Size = New-Object System.Drawing.Size(536, 210)
     $textLog.Font = New-Object System.Drawing.Font('Consolas', 8.5)
     $textLog.BackColor = [System.Drawing.SystemColors]::Window
     $form.Controls.Add($textLog)
 
     $progress = New-Object System.Windows.Forms.ProgressBar
-    $progress.Location = New-Object System.Drawing.Point(12, 376)
+    $progress.Location = New-Object System.Drawing.Point(12, 406)
     $progress.Size = New-Object System.Drawing.Size(536, 12)
     $progress.Style = 'Blocks'
     $form.Controls.Add($progress)
 
     $buttonInstall = New-Object System.Windows.Forms.Button
     $buttonInstall.Text = 'Install'
-    $buttonInstall.Location = New-Object System.Drawing.Point(366, 402)
+    $buttonInstall.Location = New-Object System.Drawing.Point(366, 432)
     $buttonInstall.Size = New-Object System.Drawing.Size(88, 28)
     $form.Controls.Add($buttonInstall)
     $form.AcceptButton = $buttonInstall
 
     $buttonClose = New-Object System.Windows.Forms.Button
     $buttonClose.Text = 'Close'
-    $buttonClose.Location = New-Object System.Drawing.Point(460, 402)
+    $buttonClose.Location = New-Object System.Drawing.Point(460, 432)
     $buttonClose.Size = New-Object System.Drawing.Size(88, 28)
     $buttonClose.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $form.Controls.Add($buttonClose)
@@ -223,8 +251,45 @@ function Show-InstallerForm {
         $checkRegional.Enabled = (-not $Busy) -and $checkDisplay.Checked
         $buttonInstall.Enabled = -not $Busy
         $buttonClose.Enabled = -not $Busy
+        $checkUninstall.Enabled = -not $Busy
         if ($Busy) { $progress.Style = 'Marquee'; $progress.MarqueeAnimationSpeed = 30 }
-        else { $progress.Style = 'Blocks'; $progress.MarqueeAnimationSpeed = 0 }
+        else { $progress.Style = 'Blocks'; $progress.MarqueeAnimationSpeed = 0; & $updateUninstall }
+    }
+
+    # Install or uninstall mode: with "Uninstall this language" ticked the install options do not apply.
+    $applyMode = {
+        if ($state.Running) { return }
+        $uninstalling = $checkUninstall.Visible -and $checkUninstall.Checked
+        $buttonInstall.Text = $(if ($uninstalling) { 'Uninstall' } else { 'Install' })
+        $checkDisplay.Enabled = -not $uninstalling
+        $checkRegional.Enabled = (-not $uninstalling) -and $checkDisplay.Checked
+    }
+
+    # The uninstall check box follows the selected language: shown for an installed language, greyed out for the
+    # language Windows was installed with.
+    $updateUninstall = {
+        $entry = $null
+        if ($comboLanguage.SelectedIndex -ge 0) { $entry = $Languages[$comboLanguage.SelectedIndex] }
+        $state.Confirming = $true
+        if ($entry -and $entry.Installed) {
+            $checkUninstall.Visible = $true
+            if ($InstallLanguage -and $entry.Tag -eq $InstallLanguage) {
+                $checkUninstall.Checked = $false
+                $checkUninstall.Enabled = $false
+                $labelUninstall.Text = 'Windows was installed with this language; it cannot be removed.'
+            }
+            else {
+                $checkUninstall.Enabled = -not $state.Running
+                $labelUninstall.Text = ''
+            }
+        }
+        else {
+            $checkUninstall.Checked = $false
+            $checkUninstall.Visible = $false
+            $labelUninstall.Text = ''
+        }
+        $state.Confirming = $false
+        & $applyMode
     }
 
     $drainQueue = {
@@ -235,6 +300,24 @@ function Show-InstallerForm {
     $checkDisplay.Add_CheckedChanged({
             $checkRegional.Enabled = $checkDisplay.Checked
             if (-not $checkDisplay.Checked) { $checkRegional.Checked = $false }
+        })
+
+    $comboLanguage.Add_SelectedIndexChanged({ & $updateUninstall })
+
+    # Ticking "Uninstall this language" asks first: a restart is required (and a display language is reset first).
+    $checkUninstall.Add_CheckedChanged({
+            if ($state.Confirming) { return }
+            if ($checkUninstall.Checked) {
+                $entry = $Languages[$comboLanguage.SelectedIndex]
+                $isDisplay = $false
+                try { $isDisplay = Test-LpiDisplayLanguage -Language $entry.Tag } catch { }
+                if (-not (Confirm-UninstallChoice -Owner $form -Entry $entry -IsDisplayLanguage $isDisplay -DefaultLanguage $InstallLanguage)) {
+                    $state.Confirming = $true
+                    $checkUninstall.Checked = $false
+                    $state.Confirming = $false
+                }
+            }
+            & $applyMode
         })
 
     $timer = New-Object System.Windows.Forms.Timer
@@ -274,14 +357,19 @@ function Show-InstallerForm {
             if ($code -ne $ExitFailure) {
                 $progress.Value = 100
                 $entry = $Languages[$state.Index]
-                $entry.Installed = $true
+                if ($state.Mode -eq 'Uninstall') {
+                    # "is removed after the restart": still installed until then, so keep it marked installed
+                    if ("$($result.Message)" -notlike '*removed after the restart*') { $entry.Installed = $false }
+                }
+                else { $entry.Installed = $true }
                 $comboLanguage.Items[$state.Index] = (& $formatItem $entry)
+                & $updateUninstall
                 $text = $result.Message
                 if ($code -eq 3010) { $text += [Environment]::NewLine + [Environment]::NewLine + 'A restart is required to finish.' }
                 [void][System.Windows.Forms.MessageBox]::Show($form, $text, $form.Text, 'OK', 'Information')
             }
             else {
-                $text = 'The installation failed.'
+                $text = $(if ($state.Mode -eq 'Uninstall') { 'The uninstall failed.' } else { 'The installation failed.' })
                 if ($result -and $result.Message) { $text += [Environment]::NewLine + [Environment]::NewLine + $result.Message }
                 $text += [Environment]::NewLine + [Environment]::NewLine + "Log: $(Join-Path $BaseParameters['LogPath'] 'LanguagePackInstaller.log')"
                 [void][System.Windows.Forms.MessageBox]::Show($form, $text, $form.Text, 'OK', 'Error')
@@ -293,13 +381,22 @@ function Show-InstallerForm {
             $state.Index = $comboLanguage.SelectedIndex
             $entry = $Languages[$state.Index]
 
-            $parameters = $BaseParameters.Clone()
-            $parameters['Language'] = $entry.Tag
-            $parameters['SetDisplayLanguage'] = $checkDisplay.Checked
-            $parameters['SetRegionalFormat'] = $checkDisplay.Checked -and $checkRegional.Checked
+            if ($checkUninstall.Visible -and $checkUninstall.Checked) {
+                $state.Mode = 'Uninstall'
+                $parameters = @{ Language = $entry.Tag; ResetDisplayLanguage = $true; UserScriptPath = $BaseParameters['UserScriptPath'] }
+                $verb = 'Uninstalling'
+            }
+            else {
+                $state.Mode = 'Install'
+                $parameters = $BaseParameters.Clone()
+                $parameters['Language'] = $entry.Tag
+                $parameters['SetDisplayLanguage'] = $checkDisplay.Checked
+                $parameters['SetRegionalFormat'] = $checkDisplay.Checked -and $checkRegional.Checked
+                $verb = 'Installing'
+            }
 
             & $setBusy $true
-            $textLog.AppendText("Installing $($entry.DisplayName) ($($entry.Tag))..." + [Environment]::NewLine)
+            $textLog.AppendText("$verb $($entry.DisplayName) ($($entry.Tag))..." + [Environment]::NewLine)
 
             # Run the install in a background runspace so the window stays responsive.
             $sessionState = [System.Management.Automation.Runspaces.InitialSessionState]::CreateDefault()
@@ -309,13 +406,13 @@ function Show-InstallerForm {
             $worker = [System.Management.Automation.PowerShell]::Create()
             $worker.Runspace = $runspace
             [void]$worker.AddScript({
-                    param($ModulePath, $Queue, $Parameters)
+                    param($ModulePath, $Queue, $Parameters, $LogPath, $Mode)
                     $ErrorActionPreference = 'Stop'
                     Import-Module -Name $ModulePath -Force
-                    Initialize-LpiLog -Path $Parameters['LogPath'] -Queue $Queue
-                    Invoke-LpiInstall @Parameters
+                    Initialize-LpiLog -Path $LogPath -Queue $Queue
+                    if ($Mode -eq 'Uninstall') { Uninstall-LpiLanguage @Parameters } else { Invoke-LpiInstall @Parameters }
                 })
-            [void]$worker.AddArgument($ModulePath).AddArgument($queue).AddArgument($parameters)
+            [void]$worker.AddArgument($ModulePath).AddArgument($queue).AddArgument($parameters).AddArgument($BaseParameters['LogPath']).AddArgument($state.Mode)
             $state.PowerShell = $worker
             $state.Handle = $worker.BeginInvoke()
             $timer.Start()
@@ -324,11 +421,12 @@ function Show-InstallerForm {
     $form.Add_FormClosing({
             param($sender, $eventArgs)
             if ($state.Running) {
-                [void][System.Windows.Forms.MessageBox]::Show($form, 'An installation is in progress. Wait for it to finish before closing.', $form.Text, 'OK', 'Warning')
+                [void][System.Windows.Forms.MessageBox]::Show($form, 'An installation or uninstall is in progress. Wait for it to finish before closing.', $form.Text, 'OK', 'Warning')
                 $eventArgs.Cancel = $true
             }
         })
 
+    & $updateUninstall   # for the preselected language
     [void]$form.ShowDialog()
     $timer.Dispose()
     $form.Dispose()
@@ -373,6 +471,6 @@ Write-LpiLog -Message 'Reading the language repository and the installed languag
 $languages = @(Get-LpiRepositoryLanguage -Repository $Repository)
 $preselect = $null
 if ($Language) { $preselect = ConvertTo-LpiLanguageTag -Language $Language }
-$exitCode = Show-InstallerForm -Languages $languages -BaseParameters $baseParameters -Preselect $preselect | Select-Object -Last 1
+$exitCode = Show-InstallerForm -Languages $languages -BaseParameters $baseParameters -Preselect $preselect -InstallLanguage (Get-LpiInstallLanguageTag) | Select-Object -Last 1
 Write-LpiLog -Message "===== Windows 11 Language Installer finished with exit code $exitCode ====="
 exit $exitCode

@@ -4,7 +4,7 @@ Last updated: 2026-10-04.
 
 | # | Item | Status |
 |---|------|--------|
-| [1](#1) | GUI: uninstall an installed language from the window (and reset the display language to the default) | Not started |
+| [1](#1) | GUI: uninstall an installed language from the window (and reset the display language to the default) | Built 2026-10-04 (mock-tested; the check box tested on the real form); test on a VM |
 | [2](#2) | GUI: easier-to-read colours and larger fonts for large, high-resolution screens | Not started |
 | [3](#3) | Real tests still open: the corrected uninstall, a run as SYSTEM from ConfigMgr, the display-language path | Open |
 | [4](#4) | Feature-only languages (en-AU, de-CH, zh-HK, ...) cannot be added | Idea |
@@ -14,9 +14,15 @@ Last updated: 2026-10-04.
 <a id="1"></a>
 ## 1. GUI: uninstall an installed language from the window
 
-**Asked 2026-10-04.**
+**Asked 2026-10-04.** **Built 2026-10-04**, still to test on a real device (a VM snapshot: it changes the display language).
 
-**Wanted:**
+**Built:**
+- Window: **Uninstall this language** for an installed language (greyed out, with the reason, for the language Windows was installed with); ticking it asks first (`Confirm-UninstallChoice`: restart required, and the display-language reset when it applies; Cancel unticks it); the button then reads **Uninstall** and the install options are greyed out; the uninstall runs in the background runspace like an install; choosing another language unticks it.
+- `Uninstall-LpiLanguage -ResetDisplayLanguage -UserScriptPath` (also `Uninstall-LanguagePack.ps1 -ResetDisplayLanguage`): a display language (the system's, or the one this tool set - `Test-LpiDisplayLanguage`) is first set back to `Get-LpiInstallLanguageTag` by `Reset-LpiDisplayLanguage` (`Set-LpiDisplayLanguage` for the default language with `-RemoveLanguage`, Active Setup kept if it was used, `DisplayLanguage` value removed), then removed. If Windows will not remove its language pack yet, `Register-LpiUninstallTask` registers the one-shot SYSTEM startup task `LanguagePackInstaller-CompleteUninstall-<tag>` (running a copy in %ProgramData%; `-FromStartupTask` removes the task when done) and the result is 3010 with the registry entry kept.
+- `Set-UserLanguage.ps1 -RemoveLanguage`: takes the removed language out of the user's language list.
+- Tests: 8 more uninstall checks (28, PS 5.1 and 7; `Set-UserLanguage.ps1` with the language-list cmdlets replaced) and `Test-Gui.ps1` (7 checks on the real form) in `LanguagePackInstaller-Tests`.
+
+**Wanted (as asked):**
 - When the language picked in the drop-down is already installed (`[installed]`), show a check box **Uninstall this language**.
 - Ticking it switches the window to uninstalling: the install options (Set as display language, regional format) are greyed out and the Install button reads **Uninstall**.
 - If the language is the display language, uninstalling it **also sets the display language back to the default** first.
@@ -66,5 +72,5 @@ The Languages and Optional Features media has 92 language variants with language
 
 ## Done
 
-- 2026-10-04: `Uninstall-LanguagePack.ps1` (removal order Windows allows, final check, refusals, cleanup policy only when this tool set it); administrator checks removed (runs as SYSTEM); `New-LanguageRepository.ps1` takes several languages from `powershell.exe -File`; README screenshot; merged to `main` (#2, #3).
+- 2026-10-04: item 1 built - uninstall from the window, with the display language set back to the default first (`-ResetDisplayLanguage`); README screenshot retaken. Windows allows, final check, refusals, cleanup policy only when this tool set it); administrator checks removed (runs as SYSTEM); `New-LanguageRepository.ps1` takes several languages from `powershell.exe -File`; README screenshot; merged to `main` (#2, #3).
 - 2026-10-03: validated against the real `LanguagesAndOptionalFeatures` folder on Windows 11 25H2 (43 languages, 82 FOD satellites each).

@@ -19,6 +19,10 @@
 .PARAMETER SetRegionalFormat
     Also set the regional format (dates, numbers, currency) and the country or region.
 
+.PARAMETER RemoveLanguage
+    A language being uninstalled: taken out of the account's language list (with its keyboards). Used when the
+    display language is set back to the default before that language is removed.
+
 .PARAMETER LogDirectory
     Folder for the per-user log (User-<username>.log). Defaults to %TEMP%.
 
@@ -29,6 +33,7 @@
 param(
     [Parameter(Mandatory)][string]$Language,
     [switch]$SetRegionalFormat,
+    [string]$RemoveLanguage,
     [string]$LogDirectory = $env:TEMP
 )
 
@@ -68,6 +73,13 @@ try {
         $entry = (New-WinUserLanguageList -Language $Language)[0]
     }
     $list.Insert(0, $entry)
+    if ($RemoveLanguage) {
+        $RemoveLanguage = [Globalization.CultureInfo]::GetCultureInfo($RemoveLanguage).Name
+        foreach ($old in @($list | Where-Object { $_.LanguageTag -eq $RemoveLanguage -and $_.LanguageTag -ne $Language })) {
+            [void]$list.Remove($old)
+            Write-UserLog "Removed $RemoveLanguage from the language list (it is being uninstalled)."
+        }
+    }
     Set-WinUserLanguageList -LanguageList $list -Force
     Write-UserLog "Language list is now: $(($list | ForEach-Object { $_.LanguageTag }) -join ', ')."
 

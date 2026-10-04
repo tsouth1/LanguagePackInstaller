@@ -8,10 +8,15 @@ Supports **Windows 11 24H2 (build 26100) and later**, client editions only. The 
 from a ConfigMgr application deployment; they do not check for administrator rights, so start them elevated when
 you run them by hand (otherwise DISM fails with "Access is denied").
 
-![The installer window: language drop-down, "Set as display language", progress log](images/installer-gui.png)
+![The installer window: language drop-down, "Set as display language", "Uninstall this language", progress log](images/installer-gui.png)
 
 The language list shows each language's English and native name and its tag, marks partial languages
-`[partial]` and languages already on the device `[installed]`. The log box shows each step while it installs.
+`[partial]` and languages already on the device `[installed]`. The log box shows each step while it runs.
+
+For an installed language the window offers **Uninstall this language**. Ticking it asks first: a restart is
+required, and if the language is the display language it is set back to the default (the language Windows was
+installed with) before it is removed. The button then reads **Uninstall**. The language Windows was installed with
+is shown greyed out: it cannot be removed.
 
 | File | Purpose |
 |---|---|
@@ -152,15 +157,21 @@ language pack is installed. Then it checks that nothing of the language is left,
 - **Not removed completely (1603):** if anything of the language is still installed at the end, it is named in the log,
   and the registry entry is kept, so a deployment still sees the language as installed. Restart and run it again.
 
-- **Refused (1603):** the system display language, the display language this tool set (set another one first,
-  and restart), and the language Windows was installed with. Nothing is removed.
+- **Refused (1603):** the language Windows was installed with, and a display language (the system's, or the one this
+  tool set) unless `-ResetDisplayLanguage` is given. Nothing is removed.
+- **`-ResetDisplayLanguage`** (the GUI always uses it): a display language is first set back to the language Windows
+  was installed with - the system, the Welcome screen and new users, the signed-in users and, if Active Setup was used,
+  every other user at their next sign-in - and taken out of those users' language lists; then it is removed. If
+  Windows will not remove its language pack before the restart, the startup task
+  `LanguagePackInstaller-CompleteUninstall-<tag>` finishes the uninstall after the restart and then removes itself
+  (exit `3010`; the registry entry stays until it is done).
 - **Script fonts** (Japanese, Korean, Chinese, Arabic, Hebrew, Thai) are kept while another installed language uses them.
 - **`BlockCleanupOfUnusedPreinstalledLangPacks`** is removed only when this tool set it and no language it installed
   is left. `-KeepCleanupPolicy` keeps it.
 - An Active Setup entry that would apply the language to users again is removed.
 - **Not installed** is a success (`0`), so the uninstall can run again.
-- **Per-user language lists are not changed:** a user who added the language keeps the entry until they remove it
-  in Settings > Time & language.
+- **Per-user language lists** are changed only by `-ResetDisplayLanguage` (as above); otherwise a user who added the
+  language keeps the entry until they remove it in Settings > Time & language.
 
 Exit codes: `0` success, `3010` restart needed (removing a language pack usually needs one), `1603` failure or
 refused. It logs to the same `LanguagePackInstaller.log`.

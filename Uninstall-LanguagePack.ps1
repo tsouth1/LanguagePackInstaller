@@ -8,8 +8,9 @@
     language pack, then this installer's registry entries for it. The uninstall command of a ConfigMgr application.
 
     It refuses (exit code 1603) to remove:
-      - the system display language, or the display language this installer set (set another one first)
       - the language Windows was installed with
+      - the system display language, or the display language this installer set - unless -ResetDisplayLanguage,
+        which first sets the display language back to the language Windows was installed with
     A script font is kept while another installed language uses it. The BlockCleanupOfUnusedPreinstalledLangPacks
     policy is removed only if this installer set it and no language it installed is left (-KeepCleanupPolicy keeps
     it). A language that is not installed is a success, so the uninstall can run again.
@@ -23,11 +24,23 @@
 .PARAMETER KeepCleanupPolicy
     Keep BlockCleanupOfUnusedPreinstalledLangPacks even when no language installed by this installer is left.
 
+.PARAMETER ResetDisplayLanguage
+    If the language is the display language, set the display language back to the language Windows was installed
+    with (system, Welcome screen, new users, signed-in users, and other users through Active Setup if it was set up),
+    then uninstall it. If Windows will not remove the language pack before the restart, a startup task finishes the
+    uninstall after it (exit code 3010).
+
+.PARAMETER FromStartupTask
+    Used by that startup task: when the uninstall succeeds, the task removes itself.
+
 .PARAMETER LogPath
     Log folder. Defaults to %windir%\Logs\LanguagePackInstaller (the installer's log file is shared).
 
 .EXAMPLE
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Uninstall-LanguagePack.ps1 -Language de-DE
+
+.EXAMPLE
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Uninstall-LanguagePack.ps1 -Language de-DE -ResetDisplayLanguage
 
 .NOTES
     Exit codes: 0 success (also when the language was not installed), 3010 success but restart needed,
@@ -38,6 +51,8 @@
 param(
     [Parameter(Mandatory)][string]$Language,
     [switch]$KeepCleanupPolicy,
+    [switch]$ResetDisplayLanguage,
+    [switch]$FromStartupTask,
     [string]$LogPath = (Join-Path -Path $env:windir -ChildPath 'Logs\LanguagePackInstaller')
 )
 
@@ -76,6 +91,13 @@ Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath 'LanguagePackInsta
 Initialize-LpiLog -Path $LogPath
 Write-LpiLog -Message "===== Windows 11 Language Uninstaller started as $([Security.Principal.WindowsIdentity]::GetCurrent().Name) ====="
 
-$result = Uninstall-LpiLanguage -Language $Language -KeepCleanupPolicy:$KeepCleanupPolicy
+$userScriptPath = Join-Path -Path $PSScriptRoot -ChildPath 'Set-UserLanguage.ps1'
+$result = Uninstall-LpiLanguage -Language $Language -KeepCleanupPolicy:$KeepCleanupPolicy -ResetDisplayLanguage:$ResetDisplayLanguage -UserScriptPath $userScriptPath
+if ($FromStartupTask -and $result.ExitCode -ne 1603) {
+    # The uninstall that finishes after the restart is done: remove its one-shot startup task (it retries otherwise).
+    $tag = ConvertTo-LpiLanguageTag -Language $Language
+    Unregister-ScheduledTask -TaskName "LanguagePackInstaller-CompleteUninstall-$tag" -Confirm:$false -ErrorAction SilentlyContinue
+    Write-LpiLog -Message "Removed the startup task LanguagePackInstaller-CompleteUninstall-$tag."
+}
 Write-LpiLog -Message "===== Windows 11 Language Uninstaller finished: exit code $($result.ExitCode) ====="
 exit $result.ExitCode

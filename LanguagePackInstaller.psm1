@@ -478,11 +478,13 @@ function Get-LpiUserScriptArgument {
     param(
         [Parameter(Mandatory)][string]$ScriptPath,
         [Parameter(Mandatory)][string]$Language,
-        [switch]$SetRegionalFormat
+        [switch]$SetRegionalFormat,
+        [string]$RemoveLanguage
     )
     $logs = Join-Path -Path $script:UserDataRoot -ChildPath 'Logs'
     $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`" -Language $Language -LogDirectory `"$logs`""
     if ($SetRegionalFormat) { $arguments += ' -SetRegionalFormat' }
+    if ($RemoveLanguage) { $arguments += " -RemoveLanguage $RemoveLanguage" }
     return $arguments
 }
 
@@ -584,7 +586,9 @@ function Set-LpiDisplayLanguage {
         [Parameter(Mandatory)][string]$Language,
         [Parameter(Mandatory)][string]$UserScriptPath,
         [switch]$SetRegionalFormat,
-        [switch]$ApplyToExistingUsers
+        [switch]$ApplyToExistingUsers,
+        # a language being uninstalled: taken out of each user's language list as well
+        [string]$RemoveLanguage
     )
     $tag = ConvertTo-LpiLanguageTag -Language $Language
     $publishedScript = Publish-LpiUserScript -UserScriptPath $UserScriptPath
@@ -596,7 +600,7 @@ function Set-LpiDisplayLanguage {
     # source, not the user-writable ProgramData area, because this runs elevated.
     Write-LpiLog -Message "Applying $tag to the running account ($([Security.Principal.WindowsIdentity]::GetCurrent().Name))."
     $powershell = Join-Path -Path $env:windir -ChildPath 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $arguments = Get-LpiUserScriptArgument -ScriptPath $UserScriptPath -Language $tag -SetRegionalFormat:$SetRegionalFormat
+    $arguments = Get-LpiUserScriptArgument -ScriptPath $UserScriptPath -Language $tag -SetRegionalFormat:$SetRegionalFormat -RemoveLanguage $RemoveLanguage
     $process = Start-Process -FilePath $powershell -ArgumentList $arguments -Wait -PassThru -WindowStyle Hidden
     if ($process.ExitCode -ne 0) {
         Write-LpiLog -Level Warning -Message "Applying $tag to the running account failed (exit code $($process.ExitCode)); see $userLogs."
@@ -630,7 +634,7 @@ function Set-LpiDisplayLanguage {
         Register-LpiCompleteTask -ScriptPath $completeScript -Language $tag -SetRegionalFormat:$SetRegionalFormat
     }
 
-    $userArguments = Get-LpiUserScriptArgument -ScriptPath $publishedScript -Language $tag -SetRegionalFormat:$SetRegionalFormat
+    $userArguments = Get-LpiUserScriptArgument -ScriptPath $publishedScript -Language $tag -SetRegionalFormat:$SetRegionalFormat -RemoveLanguage $RemoveLanguage
     $self = [Security.Principal.WindowsIdentity]::GetCurrent().Name
     $users = @(Get-LpiLoggedOnUser | Where-Object { $_ -ne $self })
     if (-not $users) {
@@ -754,6 +758,69 @@ function Remove-LpiEmptyKey {
     return $false
 }
 
+function Test-LpiDisplayLanguage {
+    <# True when $Language is the system display language or the display language this installer set. #>
+    param([Parameter(Mandatory)][string]$Language)
+    $tag = ConvertTo-LpiLanguageTag -Language $Language
+    $systemUi = $null
+    try { $systemUi = ConvertTo-LpiLanguageTag -Language "$(Get-SystemPreferredUILanguage -ErrorAction Stop)" } catch { }
+    $setDisplay = $null
+    try { $setDisplay = (Get-ItemProperty -LiteralPath $script:RegistryRoot -Name 'DisplayLanguage' -ErrorAction Stop).DisplayLanguage } catch { }
+    return [bool](($systemUi -eq $tag) -or ($setDisplay -and (ConvertTo-LpiLanguageTag -Language $setDisplay) -eq $tag))
+}
+
+function Reset-LpiDisplayLanguage {
+    <#
+        Sets the display language back to the default - the language Windows was installed with - because $Language is
+        being uninstalled: the system, the Welcome screen and new users, the signed-in users and (when an Active Setup
+        entry exists) every other user at next sign-in; $Language is taken out of those users' language lists.
+        Returns the default language tag.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Language,
+        [Parameter(Mandatory)][string]$UserScriptPath
+    )
+    $tag = ConvertTo-LpiLanguageTag -Language $Language
+    $default = Get-LpiInstallLanguageTag
+    if (-not $default) { throw 'The language Windows was installed with could not be read, so the display language cannot be set back to it.' }
+    if ($default -eq $tag) { throw "$tag is the language Windows was installed with; it cannot be removed." }
+    $hadActiveSetup = Test-Path -LiteralPath $script:ActiveSetupKey
+    Write-LpiLog -Message "$tag is the display language; setting the display language back to the default, $default, before uninstalling it."
+    Set-LpiDisplayLanguage -Language $default -UserScriptPath $UserScriptPath -RemoveLanguage $tag -ApplyToExistingUsers:$hadActiveSetup
+    Remove-ItemProperty -LiteralPath $script:RegistryRoot -Name 'DisplayLanguage' -ErrorAction SilentlyContinue
+    return $default
+}
+
+function Register-LpiUninstallTask {
+    <#
+        One-shot SYSTEM startup task that finishes an uninstall after the restart, when Windows would not remove the
+        language pack of a display language that was only just switched back to the default. It runs a copy of
+        Uninstall-LanguagePack.ps1 (with this module) in %ProgramData%\LanguagePackInstaller, where only SYSTEM and
+        Administrators can write, and removes itself once the uninstall succeeds.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Language,
+        [Parameter(Mandatory)][string]$SourceDirectory
+    )
+    $root = $script:UserDataRoot
+    if (-not (Test-Path -LiteralPath $root)) { New-Item -Path $root -ItemType Directory -Force | Out-Null }
+    foreach ($file in 'Uninstall-LanguagePack.ps1', 'LanguagePackInstaller.psm1', 'Set-UserLanguage.ps1') {
+        Copy-Item -LiteralPath (Join-Path -Path $SourceDirectory -ChildPath $file) -Destination $root -Force
+    }
+    $powershell = Join-Path -Path $env:windir -ChildPath 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$(Join-Path -Path $root -ChildPath 'Uninstall-LanguagePack.ps1')`" -Language $Language -FromStartupTask"
+    $action = New-ScheduledTaskAction -Execute $powershell -Argument $arguments
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+    $trigger.Delay = 'PT1M'
+    $principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -LogonType ServiceAccount -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
+    Register-ScheduledTask -TaskName "LanguagePackInstaller-CompleteUninstall-$Language" -TaskPath '\' -Action $action `
+        -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+    Write-LpiLog -Message "Registered a startup task that finishes uninstalling $Language after the restart."
+}
+
 function Remove-LpiCapability {
     <# Removes one capability, logging the result; returns $true when DISM reports that a restart is needed. #>
     param([Parameter(Mandatory)][string]$Name)
@@ -772,31 +839,38 @@ function Uninstall-LpiLanguage {
     <#
         Removes one language: its language features and font, its satellite packages for installed Features on
         Demand, then its language pack; then this installer's registry entries for it. Refuses (1603) to remove
-        the system display language, the display language this installer set, or Windows' install language.
+        Windows' install language. A display language (the system's, or the one this installer set) is refused too,
+        unless -ResetDisplayLanguage: then the display language is first set back to Windows' install language
+        (Reset-LpiDisplayLanguage), and if Windows will not remove the language pack before the restart, a startup
+        task finishes the uninstall after it (exit 3010).
         A language that is not installed is a success (0), so a deployment can run it again.
         Returns an object with ExitCode (0, 3010 or 1603), RestartNeeded and Message.
     #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Language,
-        [switch]$KeepCleanupPolicy
+        [switch]$KeepCleanupPolicy,
+        [switch]$ResetDisplayLanguage,
+        [string]$UserScriptPath
     )
     $tag = ConvertTo-LpiLanguageTag -Language $Language
     $escaped = [regex]::Escape($tag)
     $dismLog = Get-LpiDismLogPath
     $restartNeeded = $false
+    $wasDisplay = $false
     try {
-        Write-LpiLog -Message "Uninstalling $tag."
+        Write-LpiLog -Message "Uninstalling $tag$(if ($ResetDisplayLanguage) { ' (display language reset allowed)' })."
 
-        # Never remove a language Windows is displaying, or the one it was installed with.
-        $systemUi = $null
-        try { $systemUi = ConvertTo-LpiLanguageTag -Language "$(Get-SystemPreferredUILanguage -ErrorAction Stop)" } catch { }
-        if ($systemUi -eq $tag) { throw "$tag is the system display language. Set another display language first (and restart), then uninstall $tag." }
-        $setDisplay = $null
-        try { $setDisplay = (Get-ItemProperty -LiteralPath $script:RegistryRoot -Name 'DisplayLanguage' -ErrorAction Stop).DisplayLanguage } catch { }
-        if ($setDisplay -and (ConvertTo-LpiLanguageTag -Language $setDisplay) -eq $tag) { throw "$tag was set as the display language by this installer. Install and set another display language first, then uninstall $tag." }
+        # Never remove the language Windows was installed with; a display language only after setting it back.
         $installLanguage = Get-LpiInstallLanguageTag
         if ($installLanguage -eq $tag) { throw "$tag is the language Windows was installed with; it cannot be removed." }
+        if (Test-LpiDisplayLanguage -Language $tag) {
+            if (-not $ResetDisplayLanguage) { throw "$tag is the display language. Use -ResetDisplayLanguage to set the display language back to the default ($installLanguage) and uninstall it, or set another display language first (and restart)." }
+            if (-not $UserScriptPath) { throw '-ResetDisplayLanguage needs -UserScriptPath (Set-UserLanguage.ps1).' }
+            [void](Reset-LpiDisplayLanguage -Language $tag -UserScriptPath $UserScriptPath)
+            $wasDisplay = $true
+            $restartNeeded = $true
+        }
 
         # The removal order matters (real test on Windows 11 25H2, 2026-10-04): Language.Basic is a permanent package
         # while the language pack is installed (0x800f0825), and the language pack's own localised parts (Notepad,
@@ -824,11 +898,23 @@ function Uninstall-LpiLanguage {
         # 1. The features that depend on Basic.
         foreach ($capability in $features) { if (Remove-LpiCapability -Name $capability.Name) { $restartNeeded = $true } }
 
-        # 2. The language pack: it takes its own localised parts with it. It must go.
+        # 2. The language pack: it takes its own localised parts with it. It must go - except that a display language
+        #    only just switched back to the default may still be in use until the restart: then the uninstall is
+        #    finished by a startup task after the restart, and the registry entry stays until it is done.
         foreach ($package in $languagePacks) {
             Write-LpiLog -Message "Removing $($package.PackageName)"
-            $result = Remove-WindowsPackage -Online -PackageName $package.PackageName -NoRestart -LogPath $dismLog -ErrorAction Stop
-            if (Test-LpiRestartNeeded -Result $result) { $restartNeeded = $true }
+            try {
+                $result = Remove-WindowsPackage -Online -PackageName $package.PackageName -NoRestart -LogPath $dismLog -ErrorAction Stop
+                if (Test-LpiRestartNeeded -Result $result) { $restartNeeded = $true }
+            }
+            catch {
+                if (-not $wasDisplay) { throw }
+                Write-LpiLog -Level Warning -Message "Windows will not remove the $tag language pack before the restart ($($_.Exception.Message))."
+                Register-LpiUninstallTask -Language $tag -SourceDirectory (Split-Path -Path $UserScriptPath -Parent)
+                $message = "The display language was set back to $installLanguage. $tag is removed after the restart."
+                Write-LpiLog -Message "$message Exit code $($script:ExitReboot)."
+                return [pscustomobject]@{ ExitCode = $script:ExitReboot; RestartNeeded = $true; Message = $message }
+            }
         }
 
         # 3. What is still installed of this language now: satellites that were added on their own.
@@ -887,6 +973,7 @@ function Uninstall-LpiLanguage {
         $exitCode = $script:ExitSuccess
         $message = "$tag was uninstalled."
         if ($restartNeeded) { $exitCode = $script:ExitReboot; $message = "$tag was uninstalled. Restart the device to finish." }
+        if ($wasDisplay) { $message = "$tag was uninstalled and the display language was set back to $installLanguage. Restart the device to finish." }
         Write-LpiLog -Message "$message Exit code $exitCode."
         Write-LpiLog -Message "Users who had $tag in their own language list keep the entry until they remove it in Settings > Time & language."
         return [pscustomobject]@{ ExitCode = $exitCode; RestartNeeded = $restartNeeded; Message = $message }
@@ -909,4 +996,6 @@ Export-ModuleMember -Function @(
     'Test-LpiPrerequisite'
     'Invoke-LpiInstall'
     'Uninstall-LpiLanguage'
+    'Get-LpiInstallLanguageTag'
+    'Test-LpiDisplayLanguage'
 )
