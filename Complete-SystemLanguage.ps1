@@ -27,6 +27,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# This script's folder (%ProgramData%\LanguagePackInstaller); $PSScriptRoot can be empty, so fall back to its own path.
+$ScriptRoot = $PSScriptRoot
+if (-not $ScriptRoot -and $MyInvocation.MyCommand.Path) { $ScriptRoot = Split-Path -Path $MyInvocation.MyCommand.Path -Parent }
+if (-not $ScriptRoot) { $ScriptRoot = Join-Path -Path $env:ProgramData -ChildPath 'LanguagePackInstaller' }
 $taskName = 'LanguagePackInstaller-CompleteSystemLanguage'
 $logDirectory = Join-Path -Path $env:windir -ChildPath 'Logs\LanguagePackInstaller'
 if (-not (Test-Path -LiteralPath $logDirectory)) { New-Item -Path $logDirectory -ItemType Directory -Force | Out-Null }
@@ -47,9 +51,9 @@ try {
     $Language = [Globalization.CultureInfo]::GetCultureInfo($Language).Name
     Write-CompleteLog "Finishing the system display language $Language after restart."
 
-    $userScript = Join-Path -Path $PSScriptRoot -ChildPath 'Set-UserLanguage.ps1'
+    $userScript = Join-Path -Path $ScriptRoot -ChildPath 'Set-UserLanguage.ps1'
     $powershell = Join-Path -Path $env:windir -ChildPath 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$userScript`" -Language $Language -LogDirectory `"$(Join-Path $PSScriptRoot 'Logs')`""
+    $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$userScript`" -Language $Language -LogDirectory `"$(Join-Path $ScriptRoot 'Logs')`""
     if ($SetRegionalFormat) { $arguments += ' -SetRegionalFormat' }
     $process = Start-Process -FilePath $powershell -ArgumentList $arguments -Wait -PassThru -WindowStyle Hidden
     if ($process.ExitCode -ne 0) { throw "Applying $Language to the SYSTEM account failed (exit code $($process.ExitCode))." }

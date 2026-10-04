@@ -61,7 +61,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Repository = (Join-Path -Path $PSScriptRoot -ChildPath 'Repository'),
+    [string]$Repository,   # default (the 'Repository' folder next to this script) set below, not here: see $ScriptRoot
     [string]$Language,
     [switch]$SetDisplayLanguage,
     [switch]$SetRegionalFormat,
@@ -78,9 +78,18 @@ $ExitCancelled = 1602
 $ExitFailure = 1603
 $BoundParameters = $PSBoundParameters
 
+# This script's folder. $PSScriptRoot was empty under a ConfigMgr deployment (2026-10-04: "Cannot bind argument to
+# parameter 'Path' because it is an empty string" in the old -Repository default), so fall back to the script's own
+# path, then to the current directory (ConfigMgr starts a program in its content folder).
+$ScriptRoot = $PSScriptRoot
+if (-not $ScriptRoot -and $MyInvocation.MyCommand.Path) { $ScriptRoot = Split-Path -Path $MyInvocation.MyCommand.Path -Parent }
+if (-not $ScriptRoot) { $ScriptRoot = (Get-Location -PSProvider FileSystem).ProviderPath }
+$ScriptPath = $PSCommandPath
+if (-not $ScriptPath) { $ScriptPath = Join-Path -Path $ScriptRoot -ChildPath 'Install-LanguagePack.ps1' }
+
 function Get-RelaunchArgument {
     <# Rebuilds this script's command line for a 64-bit relaunch. #>
-    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$ScriptPath`"")
     foreach ($parameter in $BoundParameters.GetEnumerator()) {
         if ($parameter.Value -is [System.Management.Automation.SwitchParameter]) {
             if ($parameter.Value.IsPresent) { $arguments += "-$($parameter.Key)" }
@@ -105,16 +114,18 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
 
 # A relative -Repository (for example LangRepo in the ConfigMgr content) is relative to this script's folder, not to
 # the current directory, so DISM and the window's background worker get the same full path.
-if (-not [IO.Path]::IsPathRooted($Repository)) { $Repository = [IO.Path]::GetFullPath((Join-Path -Path $PSScriptRoot -ChildPath $Repository)) }
+if (-not $Repository) { $Repository = Join-Path -Path $ScriptRoot -ChildPath 'Repository' }
+if (-not [IO.Path]::IsPathRooted($Repository)) { $Repository = [IO.Path]::GetFullPath((Join-Path -Path $ScriptRoot -ChildPath $Repository)) }
 
-Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath 'LanguagePackInstaller.psm1') -Force
+Import-Module -Name (Join-Path -Path $ScriptRoot -ChildPath 'LanguagePackInstaller.psm1') -Force
 # No administrator check: the script runs as SYSTEM from a ConfigMgr application deployment.
 
-$UserScriptPath = Join-Path -Path $PSScriptRoot -ChildPath 'Set-UserLanguage.ps1'
-$ModulePath = Join-Path -Path $PSScriptRoot -ChildPath 'LanguagePackInstaller.psm1'
+$UserScriptPath = Join-Path -Path $ScriptRoot -ChildPath 'Set-UserLanguage.ps1'
+$ModulePath = Join-Path -Path $ScriptRoot -ChildPath 'LanguagePackInstaller.psm1'
 
 Initialize-LpiLog -Path $LogPath
 Write-LpiLog -Message "===== Windows 11 Language Installer started as $([Security.Principal.WindowsIdentity]::GetCurrent().Name) (silent: $([bool]$Silent)) ====="
+Write-LpiLog -Message "Script folder: $ScriptRoot$(if (-not $PSScriptRoot) { ' (PSScriptRoot was empty)' }). Repository: $Repository"
 
 #region GUI
 

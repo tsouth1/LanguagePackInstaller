@@ -60,9 +60,17 @@ $ErrorActionPreference = 'Stop'
 $ExitFailure = 1603
 $BoundParameters = $PSBoundParameters
 
+# This script's folder. $PSScriptRoot was empty under a ConfigMgr deployment (2026-10-04), so fall back to the script's
+# own path, then to the current directory (ConfigMgr starts a program in its content folder).
+$ScriptRoot = $PSScriptRoot
+if (-not $ScriptRoot -and $MyInvocation.MyCommand.Path) { $ScriptRoot = Split-Path -Path $MyInvocation.MyCommand.Path -Parent }
+if (-not $ScriptRoot) { $ScriptRoot = (Get-Location -PSProvider FileSystem).ProviderPath }
+$ScriptPath = $PSCommandPath
+if (-not $ScriptPath) { $ScriptPath = Join-Path -Path $ScriptRoot -ChildPath 'Uninstall-LanguagePack.ps1' }
+
 function Get-RelaunchArgument {
     <# Rebuilds this script's command line for a 64-bit relaunch. #>
-    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$ScriptPath`"")
     foreach ($parameter in $BoundParameters.GetEnumerator()) {
         if ($parameter.Value -is [System.Management.Automation.SwitchParameter]) {
             if ($parameter.Value.IsPresent) { $arguments += "-$($parameter.Key)" }
@@ -85,13 +93,14 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     exit $process.ExitCode
 }
 
-Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath 'LanguagePackInstaller.psm1') -Force
+Import-Module -Name (Join-Path -Path $ScriptRoot -ChildPath 'LanguagePackInstaller.psm1') -Force
 # No administrator check: the script runs as SYSTEM from a ConfigMgr application deployment.
 
 Initialize-LpiLog -Path $LogPath
 Write-LpiLog -Message "===== Windows 11 Language Uninstaller started as $([Security.Principal.WindowsIdentity]::GetCurrent().Name) ====="
 
-$userScriptPath = Join-Path -Path $PSScriptRoot -ChildPath 'Set-UserLanguage.ps1'
+Write-LpiLog -Message "Script folder: $ScriptRoot$(if (-not $PSScriptRoot) { ' (PSScriptRoot was empty)' })."
+$userScriptPath = Join-Path -Path $ScriptRoot -ChildPath 'Set-UserLanguage.ps1'
 $result = Uninstall-LpiLanguage -Language $Language -KeepCleanupPolicy:$KeepCleanupPolicy -ResetDisplayLanguage:$ResetDisplayLanguage -UserScriptPath $userScriptPath
 if ($FromStartupTask -and $result.ExitCode -ne 1603) {
     # The uninstall that finishes after the restart is done: remove its one-shot startup task (it retries otherwise).
