@@ -90,6 +90,9 @@ if you want to wrap it anyway.
 .\New-LanguageRepository.ps1 -Source F:\LanguagesAndOptionalFeatures -Destination \\server\LangRepo -Language de-DE, fr-FR, ja-JP
 ```
 
+From `powershell.exe -File` (cmd, a batch file, a scheduled task), pass the languages as one comma-separated value,
+for example `-Language de-DE,fr-FR,ja-JP`; commas, semicolons and spaces all separate tags, in any letter case.
+
 It copies the `metadata` folder, plus each language's language pack, features, font and FOD
 satellites (`-SkipFodSatellites` leaves the satellites out). Keep the repository out of Git
 (`.gitignore` already excludes `Repository/` and `*.cab`).
