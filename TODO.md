@@ -4,7 +4,7 @@ Last updated: 2026-10-04.
 
 | # | Item | Status |
 |---|------|--------|
-| [1](#1) | GUI: uninstall an installed language from the window (and reset the display language to the default) | Built 2026-10-04 (mock-tested; the check box tested on the real form); test on a VM |
+| [1](#1) | GUI: uninstall an installed language from the window (and reset the display language to the default) | Done 2026-10-04 (tested on a VM: fr-FR display language reset to en-US and uninstalled, then de-DE) |
 | [2](#2) | GUI: easier-to-read colours and larger fonts for large, high-resolution screens | Built 2026-10-04 (tested on the real form at 100 %, 150 %/200 % simulated); check on a scaled screen |
 | [3](#3) | Real tests still open: the corrected uninstall, a run as SYSTEM from ConfigMgr, the display-language path | Open |
 | [4](#4) | Feature-only languages (en-AU, de-CH, zh-HK, ...) cannot be added | Idea |
@@ -66,7 +66,7 @@ Last updated: 2026-10-04.
 
 - **The corrected uninstall** (2026-10-04, removal order): run `Uninstall-LanguagePack.ps1 -Language de-DE` once more on the test PC to remove the leftover `Language.Basic~~~de-DE` (expected exit 0), then a full install + uninstall from a clean start.
 - **A run as SYSTEM from a ConfigMgr application** (the administrator checks were removed for this): install and uninstall programs, exit codes 0 / 3010 / 1603, the detection method, the repository on a share (computer-account access).
-- **The display-language path** (`-SetDisplayLanguage`): the system part, the restart task (`LanguagePackInstaller-CompleteSystemLanguage`), the signed-in user step, Active Setup for other profiles. On a VM snapshot.
+- **The display-language path** (`-SetDisplayLanguage`): the system part and the restart task (`LanguagePackInstaller-CompleteSystemLanguage`) passed on a VM 2026-10-04 (fr-FR); still open: another signed-in user, Active Setup for other profiles.
 
 ---
 
@@ -79,6 +79,7 @@ The Languages and Optional Features media has 92 language variants with language
 
 ## Done
 
+- 2026-10-04: item 1 tested on a VM - fr-FR (display language) reset to en-US and uninstalled, de-DE uninstalled, 3010 each, no DISM errors.
 - 2026-10-04: item 2 built - DPI-aware window, larger fonts, fixed high-contrast colours; README screenshot retaken.
 - 2026-10-04: item 1 built - uninstall from the window, with the display language set back to the default first (`-ResetDisplayLanguage`); README screenshot retaken. Windows allows, final check, refusals, cleanup policy only when this tool set it); administrator checks removed (runs as SYSTEM); `New-LanguageRepository.ps1` takes several languages from `powershell.exe -File`; README screenshot; merged to `main` (#2, #3).
 - 2026-10-03: validated against the real `LanguagesAndOptionalFeatures` folder on Windows 11 25H2 (43 languages, 82 FOD satellites each).

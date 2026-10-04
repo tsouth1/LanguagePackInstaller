@@ -229,4 +229,10 @@ On 2026-10-04 a real install and uninstall of de-DE on that Windows 11 25H2 PC: 
 uninstall removed the language pack but left `Language.Basic` installed (permanent while the language pack was
 installed) and reported success; that led to the removal order and the final check above.
 
-The display-language, scheduled-task and Active Setup parts still need testing on a real device. Start on a VM snapshot.
+On 2026-10-04 on a Windows 11 VM, from the GUI: fr-FR installed as the display language (3010; Windows refused the
+system preferred UI language during the install, as expected, and the startup task set it after the restart and
+removed itself). Then, from the same window, fr-FR was uninstalled with the display language set back to en-US, and
+de-DE uninstalled after it: all features, the language pack and Basic removed in order, no DISM errors, 3010 each
+(DISM asked for a restart).
+
+Still to test: a run as SYSTEM from ConfigMgr, other signed-in users and Active Setup for other profiles.
