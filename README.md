@@ -11,7 +11,8 @@ you run them by hand (otherwise DISM fails with "Access is denied").
 ![The installer window: language drop-down, "Set as display language", "Uninstall this language", progress log](images/installer-gui.png)
 
 The language list shows each language's English and native name and its tag, marks partial languages
-`[partial]` and languages already on the device `[installed]`. The log box shows each step while it runs.
+`[partial]` and languages already on the device `[installed]`. Below the languages with a language pack it lists the
+feature-only languages, marked `[features only]` (see below). The log box shows each step while it runs.
 
 For an installed language the window offers **Uninstall this language**. Ticking it asks first: a restart is
 required, and if the language is the display language it is set back to the default (the language Windows was
@@ -23,7 +24,7 @@ of a stretched bitmap), uses Segoe UI 11 pt (Consolas 10.5 pt in the log), and h
 that do not depend on the user's theme (it may run as SYSTEM in the user's session).
 
 It opens in a **dark theme** (with a dark title bar and log scroll bar). The **Light theme** button at the top right
-switches to the light theme below, and **Dark theme** switches back. The choice is not saved; the next run opens dark.
+switches to the light theme below, and **Dark theme** switches back. The choice is not saved; the next run opens dark again, unless the script is started with `-LightTheme`.
 
 ![The installer window in the light theme](images/installer-gui-light.png)
 
@@ -88,7 +89,7 @@ if you want to wrap it anyway.
 6. If **Set as display language** is ticked: runs the system and per-user steps above.
    Optionally sets the regional format and country/region as well. Straight after the language
    pack is added, Windows can refuse the system steps ("Value does not fall within the expected
-   range") until the restart that completes it. In that case the installer logs a warning, still
+   range") until the restart that completes it. This is expected: the installer logs it as information, still
    applies the per-user settings, and registers the startup task
    `LanguagePackInstaller-CompleteSystemLanguage`. That task finishes the system part after the
    restart and then removes itself; a second restart then shows the new language on the
@@ -120,6 +121,17 @@ up to date, so add languages before patching where you can.
 Partial languages (ca-ES, eu-ES, gl-ES, id-ID, vi-VN) need a base language installed first. The
 installer warns if none of the usual base languages is present.
 
+**Feature-only languages.** The LOF media has 92 languages with language features but no language pack, for
+example en-AU, en-CA, de-CH, fr-BE, es-US, zh-HK, hi-IN, ta-IN. Windows is not translated into them, so they cannot be
+the display language; they are added as additional languages (keyboard, spelling, handwriting, speech, regional
+format) next to a display language. The installer adds their features (Basic first; some have only one, such as
+de-AT's text-to-speech voice) and the script font Windows uses for them (Devanagari for hi-IN, Traditional Chinese
+for zh-HK and so on, taken from the media's metadata), and records them like any other language, so the detection
+method and the uninstall work the same. `-SetDisplayLanguage` with one of them fails (1603); in the window the display
+options are greyed out. Users then add the language in Settings > Time & language > Language & region, without a
+download. A script font shared with another installed language (hi-IN and mr-IN, ar-SA and ar-EG) stays installed
+until the last of them is removed.
+
 ## Running it
 
 ```powershell
@@ -141,6 +153,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-LanguagePack.p
 | `-ApplyToExistingUsers` | With `-SetDisplayLanguage`: every other existing profile at its next sign-in (Active Setup). |
 | `-AllowLanguageCleanup` | Don't set the policy that keeps unused language packs. |
 | `-Silent` | No GUI. |
+| `-LightTheme` | Open the window in the light theme (default: dark). |
 | `-LogPath` | Log folder. Default: `%windir%\Logs\LanguagePackInstaller`. |
 
 **Exit codes:** `0` success, `3010` success with a restart needed (any display-language change

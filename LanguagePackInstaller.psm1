@@ -36,6 +36,20 @@ $script:FontScripts = @{
     'th-TH' = 'Thai'
     'zh-CN' = 'Hans'
     'zh-TW' = 'Hant'
+    # Feature-only languages (no language pack), from the LOF metadata (DesktopTargetCompDB_Conditions: the font
+    # Windows adds when a user's language is one of these).
+    'am-ET' = 'Ethi'; 'ar-EG' = 'Arab'; 'as-IN' = 'Beng'; 'bn-BD' = 'Beng'; 'bn-IN' = 'Beng'; 'fa-IR' = 'Arab'
+    'gu-IN' = 'Gujr'; 'hi-IN' = 'Deva'; 'km-KH' = 'Khmr'; 'kn-IN' = 'Knda'; 'lo-LA' = 'Laoo'; 'ml-IN' = 'Mlym'
+    'mr-IN' = 'Deva'; 'ne-NP' = 'Deva'; 'or-IN' = 'Orya'; 'pa-Arab-PK' = 'Arab'; 'pa-IN' = 'Guru'; 'ps-AF' = 'Arab'
+    'sd-Arab-PK' = 'Arab'; 'si-LK' = 'Sinh'; 'ta-IN' = 'Taml'; 'te-IN' = 'Telu'; 'ug-CN' = 'Arab'; 'ur-PK' = 'Arab'
+    'zh-HK' = 'Hant'
+}
+
+# Names for the few repository tags Windows has no display name for.
+$script:LanguageNames = @{
+    'fj-FJ'       = 'Fijian (Fiji)'
+    'kok-Deva-IN' = 'Konkani (Devanagari, India)'
+    'sco-Latn'    = 'Scots'
 }
 
 # Partial (LIP) languages and the full languages Windows accepts as their base.
@@ -156,6 +170,18 @@ function Get-LpiInstalledLanguageTag {
     return @($tags | Sort-Object -Unique)
 }
 
+function Get-LpiInstalledFeatureLanguageTag {
+    <# Tags of the languages with at least one installed language feature (Basic, OCR, ...), with or without a language pack. #>
+    [CmdletBinding()]
+    param([switch]$Refresh)
+    $tags = foreach ($package in Get-LpiInstalledPackage -Refresh:$Refresh) {
+        if ($package.PackageName -match '^Microsoft-Windows-LanguageFeatures-(Basic|Handwriting|OCR|Speech|TextToSpeech)-(.+?)-Package~') {
+            ConvertTo-LpiLanguageTag -Language $Matches[2]
+        }
+    }
+    return @($tags | Sort-Object -Unique)
+}
+
 function Get-LpiLanguageFile {
     <#
         The CABs in a LanguagesAndOptionalFeatures-style folder that belong to one
@@ -207,38 +233,66 @@ function Get-LpiLanguageFile {
 }
 
 function Get-LpiRepositoryLanguage {
-    <# The languages that have a language pack CAB in the repository, sorted by name. #>
+    <#
+        The languages in the repository: those with a language pack CAB (Type Full or Partial), sorted by name, then
+        the feature-only languages (Type Features: language features such as spelling or speech, but no language pack,
+        for example en-AU, de-CH, hi-IN), sorted by name. A feature-only language cannot be a display language.
+    #>
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)][string]$Repository,
         [switch]$SkipInstalledCheck
     )
     $installed = @()
-    if (-not $SkipInstalledCheck) { $installed = Get-LpiInstalledLanguageTag }
+    $installedFeatures = @()
+    if (-not $SkipInstalledCheck) {
+        $installed = Get-LpiInstalledLanguageTag
+        $installedFeatures = Get-LpiInstalledFeatureLanguageTag
+    }
+    $newEntry = {
+        param([string]$Tag, [string]$Type, [string]$PackagePath, [bool]$Installed)
+        $displayName = $Tag
+        $nativeName = $Tag
+        try {
+            $culture = [Globalization.CultureInfo]::GetCultureInfo($Tag)
+            $displayName = $culture.DisplayName
+            $nativeName = $culture.NativeName
+        }
+        catch { }
+        if ($script:LanguageNames[$Tag] -and ($displayName -eq $Tag -or $displayName -match '^Unknown')) {
+            $displayName = $script:LanguageNames[$Tag]
+            $nativeName = $script:LanguageNames[$Tag]
+        }
+        [pscustomobject]@{
+            Tag         = $Tag
+            DisplayName = $displayName
+            NativeName  = $nativeName
+            Type        = $Type
+            PackagePath = $PackagePath
+            Installed   = $Installed
+        }
+    }
 
     $languages = foreach ($file in Get-ChildItem -LiteralPath $Repository -Filter 'Microsoft-Windows-*-Language-Pack_x64_*.cab' -File) {
         if ($file.Name -notmatch '^Microsoft-Windows-(Client|Lip)-Language-Pack_x64_(.+)\.cab$') { continue }
         $type = 'Full'
         if ($Matches[1] -eq 'Lip') { $type = 'Partial' }
         $tag = ConvertTo-LpiLanguageTag -Language $Matches[2]
-        $displayName = $tag
-        $nativeName = $tag
-        try {
-            $culture = [Globalization.CultureInfo]::GetCultureInfo($tag)
-            $displayName = $culture.DisplayName
-            $nativeName = $culture.NativeName
-        }
-        catch { }
-        [pscustomobject]@{
-            Tag         = $tag
-            DisplayName = $displayName
-            NativeName  = $nativeName
-            Type        = $type
-            PackagePath = $file.FullName
-            Installed   = ($installed -contains $tag)
+        & $newEntry $tag $type $file.FullName ($installed -contains $tag)
+    }
+    $languages = @($languages | Sort-Object -Property DisplayName)
+
+    $withPack = @($languages | ForEach-Object { $_.Tag })
+    $featureTags = foreach ($file in Get-ChildItem -LiteralPath $Repository -Filter 'Microsoft-Windows-LanguageFeatures-*-Package~*.cab' -File) {
+        if ($file.Name -match '^Microsoft-Windows-LanguageFeatures-(Basic|Handwriting|OCR|Speech|TextToSpeech)-(.+?)-Package~') {
+            ConvertTo-LpiLanguageTag -Language $Matches[2]
         }
     }
-    return @($languages | Sort-Object -Property DisplayName)
+    $featureOnly = foreach ($tag in @($featureTags | Sort-Object -Unique)) {
+        if ($withPack -contains $tag) { continue }
+        & $newEntry $tag 'Features' $null ($installedFeatures -contains $tag)
+    }
+    return @($languages) + @($featureOnly | Sort-Object -Property DisplayName)
 }
 
 #endregion
@@ -275,8 +329,9 @@ function Test-LpiPrerequisite {
     if (-not (Test-Path -LiteralPath $Repository)) {
         $problems.Add("The language repository was not found: $Repository")
     }
-    elseif (-not (Get-ChildItem -LiteralPath $Repository -Filter 'Microsoft-Windows-*-Language-Pack_x64_*.cab' -File)) {
-        $problems.Add("The language repository contains no language pack CABs: $Repository")
+    elseif (-not (Get-ChildItem -LiteralPath $Repository -Filter 'Microsoft-Windows-*-Language-Pack_x64_*.cab' -File) -and
+        -not (Get-ChildItem -LiteralPath $Repository -Filter 'Microsoft-Windows-LanguageFeatures-*-Package~*.cab' -File)) {
+        $problems.Add("The language repository contains no language pack or language feature CABs: $Repository")
     }
     elseif (-not (Test-Path -LiteralPath (Join-Path -Path $Repository -ChildPath 'metadata'))) {
         $problems.Add("The language repository has no 'metadata' folder, which DISM needs to add language features: $Repository")
@@ -326,7 +381,10 @@ function Install-LpiLanguage {
 
     $files = Get-LpiLanguageFile -Path $Repository -Language $tag
 
-    if ($Language.Installed) {
+    if ($Language.Type -eq 'Features') {
+        Write-LpiLog -Message "$tag has no language pack (Windows is not translated into it); adding its language features only."
+    }
+    elseif ($Language.Installed) {
         Write-LpiLog -Message "Language pack for $tag is already installed."
     }
     else {
@@ -337,7 +395,9 @@ function Install-LpiLanguage {
     }
 
     $capabilities = @($files | Where-Object { $_.Kind -in @('Feature', 'Font') })
+    $failed = 0
     if (-not $capabilities) {
+        if ($Language.Type -eq 'Features') { throw "No language feature CABs for $tag were found in the repository." }
         Write-LpiLog -Level Warning -Message "No language feature CABs for $tag were found in the repository."
     }
     foreach ($item in $capabilities) {
@@ -362,7 +422,12 @@ function Install-LpiLanguage {
             # Without the Basic feature (spelling, typing) the language is not usable, so stop.
             if ($item.Capability -like 'Language.Basic~*') { throw }
             Write-LpiLog -Level Warning -Message "Could not add $($item.Capability): $($_.Exception.Message)"
+            if ($item.Kind -eq 'Feature') { $failed++ }
         }
+    }
+    # A feature-only language is nothing but its features: when none could be added, the install failed.
+    if ($Language.Type -eq 'Features' -and $capabilities -and $failed -ge @($capabilities | Where-Object { $_.Kind -eq 'Feature' }).Count) {
+        throw "None of the language features of $tag could be added; see the DISM log."
     }
 
     Get-LpiInstalledPackage -Refresh | Out-Null
@@ -613,7 +678,8 @@ function Set-LpiDisplayLanguage {
             Set-SystemPreferredUILanguage -Language $tag -ErrorAction Stop
         }
         catch {
-            Write-LpiLog -Level Warning -Message "Windows refused the system preferred UI language for now: $($_.Exception.Message)"
+            # Expected right after the language pack is added: Windows takes the new language only after a restart.
+            Write-LpiLog -Message "Windows applies the system preferred UI language after the restart (it answered: $($_.Exception.Message))."
             $systemDone = $false
         }
     }
@@ -624,7 +690,7 @@ function Set-LpiDisplayLanguage {
             Copy-UserInternationalSettingsToSystem -WelcomeScreen $true -NewUser $true -ErrorAction Stop
         }
         catch {
-            Write-LpiLog -Level Warning -Message "Windows refused to copy the settings to the Welcome screen and new users for now: $($_.Exception.Message)"
+            Write-LpiLog -Message "Windows copies the settings to the Welcome screen and new users after the restart (it answered: $($_.Exception.Message))."
             $systemDone = $false
         }
     }
@@ -691,10 +757,14 @@ function Invoke-LpiInstall {
         Write-LpiLog -Message "Installing $tag from $Repository (display language: $([bool]$SetDisplayLanguage), regional format: $([bool]$SetRegionalFormat), system locale: $([bool]$SetSystemLocale))."
 
         $entry = Get-LpiRepositoryLanguage -Repository $Repository | Where-Object { $_.Tag -eq $tag } | Select-Object -First 1
-        if (-not $entry) { throw "No language pack for $tag was found in $Repository." }
+        if (-not $entry) { throw "No language pack or language features for $tag were found in $Repository." }
+        $featuresOnly = ($entry.Type -eq 'Features')
+        if ($featuresOnly -and $SetDisplayLanguage) {
+            throw "$tag has no language pack, so it cannot be the display language. Install it without -SetDisplayLanguage to add its language features (spelling, typing, speech)."
+        }
 
         if (Install-LpiLanguage -Repository $Repository -Language $entry) { $restartNeeded = $true }
-        if (Install-LpiFodSatellite -Repository $Repository -Language $tag) { $restartNeeded = $true }
+        if (-not $featuresOnly -and (Install-LpiFodSatellite -Repository $Repository -Language $tag)) { $restartNeeded = $true }
         if (-not $AllowLanguageCleanup) { Disable-LpiLanguageCleanup }
 
         if ($SetDisplayLanguage) {
@@ -724,6 +794,10 @@ function Invoke-LpiInstall {
         if ($restartNeeded) {
             $exitCode = $script:ExitReboot
             $message = "$tag was installed. Restart the device (or sign out) to finish."
+        }
+        if ($featuresOnly) {
+            $message = $message.Replace("$tag was installed.", "The $tag language features were installed.")
+            $message += " Users add $tag in Settings > Time & language > Language & region; its features are already on the device."
         }
         Write-LpiLog -Message "$message Exit code $exitCode."
         return [pscustomobject]@{ ExitCode = $exitCode; RestartNeeded = $restartNeeded; Message = $message }
@@ -884,7 +958,8 @@ function Uninstall-LpiLanguage {
         $font = @()
         $fontScript = $script:FontScripts[$tag]
         if ($fontScript) {
-            $others = @(Get-LpiInstalledLanguageTag | Where-Object { $_ -ne $tag -and $script:FontScripts[$_] -eq $fontScript })
+            # languages with a language pack or with language features only (ar-SA and ar-EG share Arab, for example)
+            $others = @(@(Get-LpiInstalledLanguageTag) + @(Get-LpiInstalledFeatureLanguageTag) | Sort-Object -Unique | Where-Object { $_ -ne $tag -and $script:FontScripts[$_] -eq $fontScript })
             $fontName = "Language.Fonts.$fontScript~~~und-$($fontScript.ToUpper())~0.0.1.0"
             if ($others) { Write-LpiLog -Message "Keeping ${fontName}: also used by $($others -join ', ')." }
             else { $font = @(Get-WindowsCapability -Online -Name $fontName -ErrorAction SilentlyContinue | Where-Object { "$($_.State)" -eq 'Installed' }) }
@@ -991,6 +1066,7 @@ Export-ModuleMember -Function @(
     'Write-LpiLog'
     'ConvertTo-LpiLanguageTag'
     'Get-LpiInstalledLanguageTag'
+    'Get-LpiInstalledFeatureLanguageTag'
     'Get-LpiLanguageFile'
     'Get-LpiRepositoryLanguage'
     'Test-LpiPrerequisite'

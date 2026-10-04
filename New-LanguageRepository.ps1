@@ -7,7 +7,8 @@
 .DESCRIPTION
     Copies only what the chosen languages need from the LanguagesAndOptionalFeatures folder:
       - the metadata folder (DISM needs it to add language features from the folder)
-      - each language's language pack CAB (full or partial/LIP)
+      - each language's language pack CAB (full or partial/LIP); a feature-only language (en-AU, de-CH, hi-IN...)
+        has none and gets only its features
       - its language features (Basic, Handwriting, OCR, Speech, TextToSpeech) and script font
       - its satellite CABs for other Features on Demand (Notepad, Paint, RSAT...), unless
         -SkipFodSatellites is used
@@ -69,7 +70,7 @@ $tags = @(foreach ($item in $Language) {
 if (-not $tags) { throw 'No language tag given in -Language.' }
 $missing = @($tags | Where-Object { $available.Tag -notcontains $_ })
 if ($missing) {
-    throw "No language pack in $Source for: $($missing -join ', '). Use -ListAvailable to see what is there."
+    throw "No language pack or language features in $Source for: $($missing -join ', '). Use -ListAvailable to see what is there."
 }
 
 if (-not (Test-Path -LiteralPath $Destination)) { New-Item -Path $Destination -ItemType Directory -Force | Out-Null }

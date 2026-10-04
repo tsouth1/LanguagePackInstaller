@@ -7,7 +7,7 @@ Last updated: 2026-10-04.
 | [1](#1) | GUI: uninstall an installed language from the window (and reset the display language to the default) | Done 2026-10-04 (tested on a VM: fr-FR display language reset to en-US and uninstalled, then de-DE) |
 | [2](#2) | GUI: easier-to-read colours and larger fonts for large, high-resolution screens | Built 2026-10-04 (tested on the real form at 100 %, 150 %/200 % simulated); check on a scaled screen |
 | [3](#3) | Real tests still open: the corrected uninstall, a run as SYSTEM from ConfigMgr, the display-language path | Open |
-| [4](#4) | Feature-only languages (en-AU, de-CH, zh-HK, ...) cannot be added | Idea |
+| [4](#4) | Feature-only languages (en-AU, de-CH, zh-HK, ...) | Built 2026-10-04 (mock-tested); test a real install on a VM |
 
 ---
 
@@ -73,11 +73,22 @@ Last updated: 2026-10-04.
 <a id="4"></a>
 ## 4. Feature-only languages
 
-The Languages and Optional Features media has 92 language variants with language features but no language pack (for example en-AU, en-CA, en-IN, de-CH, fr-BE, fr-CH, es-US, zh-HK, hi-IN). The installer offers only languages with a language pack, so it cannot add them. Windows uses them as additional languages (keyboard, spelling, speech, regional format) on top of a display language. Possible addition: list them separately and install their features only.
+The Languages and Optional Features media has 92 language variants with language features but no language pack (for example en-AU, en-CA, en-IN, de-CH, fr-BE, fr-CH, es-US, zh-HK, hi-IN). Windows uses them as additional languages (keyboard, spelling, speech, regional format) on top of a display language.
+
+**Built 2026-10-04:**
+- `Get-LpiRepositoryLanguage` lists them after the language-pack languages (Type `Features`); the window marks them `[features only]` and greys out the display options with the reason. `-SetDisplayLanguage` with one fails (1603) before anything is added.
+- `Install-LpiLanguage` adds only their features (Basic first, Speech after TextToSpeech, as the metadata's dependencies require) and their script font; 25 of them need one (from `DesktopTargetCompDB_Conditions`: Deva, Beng, Arab, Hant, ...), added to `$script:FontScripts`. No satellites (the media has none for them). Fails only when none of their features could be added.
+- Installed detection from their feature packages (`Get-LpiInstalledFeatureLanguageTag`); the uninstall works unchanged and keeps a script font another installed language still uses.
+- Names for the three tags Windows PowerShell 5.1 has none for (fj-FJ, kok-Deva-IN, sco-Latn). `New-LanguageRepository.ps1` copies them too.
+- Tests: `Test-FeatureOnly.ps1` (19 checks on the real folder with DISM mocked) and 2 more window checks (`Test-Gui.ps1`, 21), PS 5.1 and 7.
+
+**Still to test:** a real install and uninstall of a feature-only language with a font (hi-IN or zh-HK) on a VM; adding it in Settings afterwards without a download.
 
 ---
 
 ## Done
+
+- 2026-10-04: item 4 built - feature-only languages (install their features and font; no display language). `-LightTheme` switch; Windows postponing the system display language until the restart is now logged as information, not a warning.
 
 - 2026-10-04: dark theme, the default, with a **Light theme** / **Dark theme** button in the header that switches to the original (light) colours and back. Dark title bar (DWM) and log scroll bar (`DarkMode_Explorer`); greyed-out check boxes redrawn in plain grey (Windows draws them embossed, unreadable on dark). `Test-Gui.ps1` 17 checks; screenshots of both themes.
 

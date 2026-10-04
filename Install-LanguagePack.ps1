@@ -43,6 +43,9 @@
 .PARAMETER Silent
     No GUI. Use for ConfigMgr deployments of a fixed language.
 
+.PARAMETER LightTheme
+    Open the window in the light theme instead of the dark one (the Theme button still switches it).
+
 .PARAMETER LogPath
     Log folder. Defaults to %windir%\Logs\LanguagePackInstaller.
 
@@ -65,6 +68,7 @@ param(
     [switch]$ApplyToExistingUsers,
     [switch]$AllowLanguageCleanup,
     [switch]$Silent,
+    [switch]$LightTheme,
     [string]$LogPath = (Join-Path -Path $env:windir -ChildPath 'Logs\LanguagePackInstaller')
 )
 
@@ -142,7 +146,9 @@ function Show-InstallerForm {
         [Parameter(Mandatory)][hashtable]$BaseParameters,
         [string]$Preselect,
         # the language Windows was installed with: never offered for uninstall
-        [string]$InstallLanguage
+        [string]$InstallLanguage,
+        # the theme the window opens in; the Theme button switches it
+        [ValidateSet('Dark', 'Light')][string]$Theme = 'Dark'
     )
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
@@ -161,8 +167,8 @@ function Show-InstallerForm {
         Light = @{ Back = '#F3F4F6'; Panel = '#FFFFFF'; Text = '#111827'; Hint = '#4B5563'; Line = '#D1D5DB'; Accent = '#0F6CBD'
                    AccentDown = '#0C5598'; Disabled = '#D1D5DB'; Border = '#9CA3AF'; Hover = '#E5E7EB' }
     }
-    foreach ($theme in @($themes.Values)) { foreach ($key in @($theme.Keys)) { $theme[$key] = [System.Drawing.ColorTranslator]::FromHtml($theme[$key]) } }
-    $state.Theme = 'Dark'
+    foreach ($palette in @($themes.Values)) { foreach ($key in @($palette.Keys)) { $palette[$key] = [System.Drawing.ColorTranslator]::FromHtml($palette[$key]) } }
+    $state.Theme = $Theme
     # Dark title bar (DWMWA_USE_IMMERSIVE_DARK_MODE) and dark log scroll bar, where Windows supports them.
     try {
         if (-not ('LanguagePackInstaller.Theme' -as [type])) {
@@ -238,6 +244,7 @@ function Show-InstallerForm {
         param($Entry)
         $text = '{0} - {1}  ({2})' -f $Entry.DisplayName, $Entry.NativeName, $Entry.Tag
         if ($Entry.Type -eq 'Partial') { $text += '  [partial]' }
+        if ($Entry.Type -eq 'Features') { $text += '  [features only]' }
         if ($Entry.Installed) { $text += '  [installed]' }
         return $text
     }
@@ -395,8 +402,7 @@ function Show-InstallerForm {
         param([bool]$Busy)
         $state.Running = $Busy
         $comboLanguage.Enabled = -not $Busy
-        $checkDisplay.Enabled = -not $Busy
-        $checkRegional.Enabled = (-not $Busy) -and $checkDisplay.Checked
+        if ($Busy) { $checkDisplay.Enabled = $false; $checkRegional.Enabled = $false }   # back to the language's state by $applyMode
         $buttonInstall.Enabled = -not $Busy
         $buttonClose.Enabled = -not $Busy
         $checkUninstall.Enabled = -not $Busy
@@ -405,12 +411,17 @@ function Show-InstallerForm {
     }
 
     # Install or uninstall mode: with "Uninstall this language" ticked the install options do not apply.
+    # A feature-only language (no language pack) cannot be the display language either.
+    $displayHint = $labelDisplay.Text
+    $featuresHint = 'No language pack: Windows cannot be shown in this language. Adds its spelling, typing and speech features; users then add the language in Settings.'
     $applyMode = {
         if ($state.Running) { return }
         $uninstalling = $checkUninstall.Visible -and $checkUninstall.Checked
+        $featuresOnly = ($comboLanguage.SelectedIndex -ge 0) -and $Languages[$comboLanguage.SelectedIndex].Type -eq 'Features'
         $buttonInstall.Text = $(if ($uninstalling) { 'Uninstall' } else { 'Install' })
-        $checkDisplay.Enabled = -not $uninstalling
-        $checkRegional.Enabled = (-not $uninstalling) -and $checkDisplay.Checked
+        $checkDisplay.Enabled = -not ($uninstalling -or $featuresOnly)
+        $checkRegional.Enabled = $checkDisplay.Enabled -and $checkDisplay.Checked
+        $labelDisplay.Text = $(if ($featuresOnly) { $featuresHint } else { $displayHint })
     }
 
     # The uninstall check box follows the selected language: shown for an installed language, greyed out for the
@@ -538,8 +549,9 @@ function Show-InstallerForm {
                 $state.Mode = 'Install'
                 $parameters = $BaseParameters.Clone()
                 $parameters['Language'] = $entry.Tag
-                $parameters['SetDisplayLanguage'] = $checkDisplay.Checked
-                $parameters['SetRegionalFormat'] = $checkDisplay.Checked -and $checkRegional.Checked
+                $display = $checkDisplay.Checked -and $entry.Type -ne 'Features'
+                $parameters['SetDisplayLanguage'] = $display
+                $parameters['SetRegionalFormat'] = $display -and $checkRegional.Checked
                 $verb = 'Installing'
             }
 
@@ -622,6 +634,6 @@ Write-LpiLog -Message 'Reading the language repository and the installed languag
 $languages = @(Get-LpiRepositoryLanguage -Repository $Repository)
 $preselect = $null
 if ($Language) { $preselect = ConvertTo-LpiLanguageTag -Language $Language }
-$exitCode = Show-InstallerForm -Languages $languages -BaseParameters $baseParameters -Preselect $preselect -InstallLanguage (Get-LpiInstallLanguageTag) | Select-Object -Last 1
+$exitCode = Show-InstallerForm -Languages $languages -BaseParameters $baseParameters -Preselect $preselect -InstallLanguage (Get-LpiInstallLanguageTag) -Theme $(if ($LightTheme) { 'Light' } else { 'Dark' }) | Select-Object -Last 1
 Write-LpiLog -Message "===== Windows 11 Language Installer finished with exit code $exitCode ====="
 exit $exitCode
