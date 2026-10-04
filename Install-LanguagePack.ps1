@@ -74,7 +74,7 @@ $ExitFailure = 1603
 $BoundParameters = $PSBoundParameters
 
 function Get-RelaunchArgument {
-    <# Rebuilds this script's command line for a 64-bit or elevated relaunch. #>
+    <# Rebuilds this script's command line for a 64-bit relaunch. #>
     $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
     foreach ($parameter in $BoundParameters.GetEnumerator()) {
         if ($parameter.Value -is [System.Management.Automation.SwitchParameter]) {
@@ -99,17 +99,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
 }
 
 Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath 'LanguagePackInstaller.psm1') -Force
-
-# A technician double-clicking the script gets a UAC prompt instead of an error.
-if (-not (Test-LpiAdministrator)) {
-    if ($Silent) {
-        # -ErrorAction Continue: under ErrorActionPreference Stop, Write-Error would end the script with exit code 1, not 1603.
-        Write-Error 'The installer must run elevated (administrator or SYSTEM).' -ErrorAction Continue
-        exit $ExitFailure
-    }
-    Start-Process -FilePath (Join-Path -Path $env:windir -ChildPath 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList (Get-RelaunchArgument) -Verb RunAs
-    exit 0
-}
+# No administrator check: the script runs as SYSTEM from a ConfigMgr application deployment.
 
 $UserScriptPath = Join-Path -Path $PSScriptRoot -ChildPath 'Set-UserLanguage.ps1'
 $ModulePath = Join-Path -Path $PSScriptRoot -ChildPath 'LanguagePackInstaller.psm1'

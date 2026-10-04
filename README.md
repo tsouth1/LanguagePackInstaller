@@ -4,7 +4,9 @@ Windows 11 Language Installer for SCCM. It installs a language from your own lan
 repository (CABs from the Languages and Optional Features ISO) and can make it the display
 language. It has a Windows Forms GUI, and a silent mode for fixed-language deployments.
 
-Supports **Windows 11 24H2 (build 26100) and later**, client editions only.
+Supports **Windows 11 24H2 (build 26100) and later**, client editions only. The scripts are meant to run as **SYSTEM**
+from a ConfigMgr application deployment; they do not check for administrator rights, so start them elevated when
+you run them by hand (otherwise DISM fails with "Access is denied").
 
 ![The installer window: language drop-down, "Set as display language", progress log](images/installer-gui.png)
 
@@ -58,7 +60,7 @@ if you want to wrap it anyway.
 
 ## What a run does
 
-1. Checks the prerequisites: elevated, 64-bit, build 26100 or later, client OS, LanguagePackManagement
+1. Checks the prerequisites: 64-bit, build 26100 or later, client OS, LanguagePackManagement
    available, repository has language packs and `metadata`.
 2. Adds the language pack CAB (skipped if already installed).
 3. Adds the language features in order: Basic, script font (ja/ko/zh/ar/he/th), OCR,
@@ -107,7 +109,7 @@ installer warns if none of the usual base languages is present.
 ## Running it
 
 ```powershell
-# GUI (prompts for elevation if needed). The repository defaults to .\Repository
+# GUI. The repository defaults to .\Repository
 .\Install-LanguagePack.ps1 -Repository \\server\LangRepo
 
 # Silent, fixed language
@@ -128,7 +130,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-LanguagePack.p
 | `-LogPath` | Log folder. Default: `%windir%\Logs\LanguagePackInstaller`. |
 
 **Exit codes:** `0` success, `3010` success with a restart needed (any display-language change
-returns this), `1602` GUI closed without installing, `1603` failure (also when not run elevated).
+returns this), `1602` GUI closed without installing, `1603` failure.
 
 **Logs** (CMTrace format):
 - `%windir%\Logs\LanguagePackInstaller\LanguagePackInstaller.log`: main log.

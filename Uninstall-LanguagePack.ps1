@@ -71,12 +71,7 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
 }
 
 Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath 'LanguagePackInstaller.psm1') -Force
-
-if (-not (Test-LpiAdministrator)) {
-    # -ErrorAction Continue: under ErrorActionPreference Stop, Write-Error would end the script with exit code 1, not 1603.
-    Write-Error 'The uninstaller must run elevated (administrator or SYSTEM).' -ErrorAction Continue
-    exit $ExitFailure
-}
+# No administrator check: the script runs as SYSTEM from a ConfigMgr application deployment.
 
 Initialize-LpiLog -Path $LogPath
 Write-LpiLog -Message "===== Windows 11 Language Uninstaller started as $([Security.Principal.WindowsIdentity]::GetCurrent().Name) ====="
