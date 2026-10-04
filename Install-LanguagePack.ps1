@@ -18,7 +18,8 @@
 
 .PARAMETER Repository
     Folder or UNC path with the language CABs and the 'metadata' folder, as built by
-    New-LanguageRepository.ps1. Defaults to the 'Repository' folder next to this script.
+    New-LanguageRepository.ps1. Defaults to the 'Repository' folder next to this script. A relative path is
+    relative to this script's folder (for example -Repository LangRepo in the ConfigMgr content).
 
 .PARAMETER Language
     Language tag to install (for example de-DE). Required with -Silent; preselects it in the GUI.
@@ -101,6 +102,10 @@ if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProces
     $process = Start-Process -FilePath $powershell64 -ArgumentList (Get-RelaunchArgument) -Wait -PassThru -NoNewWindow
     exit $process.ExitCode
 }
+
+# A relative -Repository (for example LangRepo in the ConfigMgr content) is relative to this script's folder, not to
+# the current directory, so DISM and the window's background worker get the same full path.
+if (-not [IO.Path]::IsPathRooted($Repository)) { $Repository = [IO.Path]::GetFullPath((Join-Path -Path $PSScriptRoot -ChildPath $Repository)) }
 
 Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath 'LanguagePackInstaller.psm1') -Force
 # No administrator check: the script runs as SYSTEM from a ConfigMgr application deployment.

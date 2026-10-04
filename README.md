@@ -145,7 +145,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install-LanguagePack.p
 
 | Parameter | Effect |
 |---|---|
-| `-Repository` | Repository folder or UNC path. Default: `Repository` next to the script. |
+| `-Repository` | Repository folder or UNC path. Default: `Repository` next to the script. A relative path is relative to the script's folder, so `-Repository LangRepo` finds a `LangRepo` subfolder of the ConfigMgr content. |
 | `-Language` | Language tag. Required with `-Silent`; preselects it in the GUI. |
 | `-SetDisplayLanguage` | System default + Welcome screen + new users + signed-in user(s). |
 | `-SetRegionalFormat` | With `-SetDisplayLanguage`: regional format and country/region as well. |
@@ -200,20 +200,31 @@ refused. It logs to the same `LanguagePackInstaller.log`.
 
 ## Deploying with ConfigMgr
 
+**Content folder:** `Install-LanguagePack.ps1`, `LanguagePackInstaller.psm1`, `Set-UserLanguage.ps1`,
+`Complete-SystemLanguage.ps1` and `Uninstall-LanguagePack.ps1`, side by side (the install refuses to start without
+the per-user and completion scripts). Optionally the repository as a `Repository\` subfolder, the default when
+`-Repository` is left out. `New-LanguageRepository.ps1`, `languagecabs.csv` and the documentation are not needed.
+Nothing is installed as a PowerShell module: the scripts load the `.psm1` from the content folder.
+
 Create an **Application** with a Script Installer deployment type:
 
-- **Program:** `powershell.exe -NoProfile -ExecutionPolicy Bypass -File Install-LanguagePack.ps1 -Repository \\server\LangRepo`
-  (add `-Language xx-XX -SetDisplayLanguage -Silent` for a fixed-language app).
-- **Installation behavior:** Install for system.
+- **Program, GUI version:** `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File Install-LanguagePack.ps1 -Repository "\\server\LangRepo"`
+  (`-WindowStyle Hidden` hides the console window behind the form; optional `-Language xx-XX` preselects a
+  language, `-SetDisplayLanguage` ticks the display-language box, `-LightTheme` opens the light theme).
+- **Program, fixed-language app:** `powershell.exe -NoProfile -ExecutionPolicy Bypass -File Install-LanguagePack.ps1 -Repository "\\server\LangRepo" -Language xx-XX -SetDisplayLanguage -Silent`
+- **Installation behavior:** Install for system. The script relaunches itself as 64-bit if started as 32-bit.
 - **GUI version only:** Logon requirement "Only when a user is logged on" and tick **"Allow users
   to view and interact with the program installation"**. Otherwise the form, which runs as
-  SYSTEM, is invisible.
-- **Uninstall program:** `powershell.exe -NoProfile -ExecutionPolicy Bypass -File Uninstall-LanguagePack.ps1 -Language xx-XX`
-  (fixed-language apps).
-- **Return codes:** keep the defaults: 3010 is a soft reboot and 1602 is a cancel.
+  SYSTEM, is invisible and the install waits until the program times out.
+- **Uninstall program:** `powershell.exe -NoProfile -ExecutionPolicy Bypass -File Uninstall-LanguagePack.ps1 -Language xx-XX -ResetDisplayLanguage`
+  (fixed-language apps). Leave it empty for the GUI version: its **Uninstall this language** check box uninstalls.
+- **Return codes:** the defaults (0, 1707 success; 3010 soft reboot; 1641 hard reboot; 1618 fast retry) do not
+  include **1602**, which the GUI returns when it is closed without installing. Add 1602 as **Failure (no reboot)**
+  so a cancel is reported as such. 1603 (failure) needs no entry.
 - **Detection method:** registry key `HKLM\SOFTWARE\LanguagePackInstaller\Languages\<tag>` exists
   (fixed-language app), or `HKLM\SOFTWARE\LanguagePackInstaller\DisplayLanguage` equals `<tag>`.
-  For the GUI version, which can install any language, any value you want to re-run on works.
+  For the GUI version, which can install any language: key `HKLM\SOFTWARE\LanguagePackInstaller\Languages` exists
+  (any language installed with this tool).
 - **Repository on a share:** SYSTEM reaches it as the computer account, so give **Domain
   Computers** read access to the share and NTFS. Alternatively, put the repository in the
   package content as `Repository\`. That's simpler but larger (a language with its features and
