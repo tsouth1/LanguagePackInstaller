@@ -22,6 +22,11 @@ The window is built for large, high-resolution screens: it is DPI-aware (sharp t
 of a stretched bitmap), uses Segoe UI 11 pt (Consolas 10.5 pt in the log), and has fixed high-contrast colours
 that do not depend on the user's theme (it may run as SYSTEM in the user's session).
 
+It opens in a **dark theme** (with a dark title bar and log scroll bar). The **Light theme** button at the top right
+switches to the light theme below, and **Dark theme** switches back. The choice is not saved; the next run opens dark.
+
+![The installer window in the light theme](images/installer-gui-light.png)
+
 | File | Purpose |
 |---|---|
 | `Install-LanguagePack.ps1` | Entry point. GUI (language drop-down, "Set as display language") or `-Silent`. |

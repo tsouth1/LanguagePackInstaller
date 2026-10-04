@@ -79,6 +79,8 @@ The Languages and Optional Features media has 92 language variants with language
 
 ## Done
 
+- 2026-10-04: dark theme, the default, with a **Light theme** / **Dark theme** button in the header that switches to the original (light) colours and back. Dark title bar (DWM) and log scroll bar (`DarkMode_Explorer`); greyed-out check boxes redrawn in plain grey (Windows draws them embossed, unreadable on dark). `Test-Gui.ps1` 17 checks; screenshots of both themes.
+
 - 2026-10-04: item 1 tested on a VM - fr-FR (display language) reset to en-US and uninstalled, de-DE uninstalled, 3010 each, no DISM errors.
 - 2026-10-04: item 2 built - DPI-aware window, larger fonts, fixed high-contrast colours; README screenshot retaken.
 - 2026-10-04: item 1 built - uninstall from the window, with the display language set back to the default first (`-ResetDisplayLanguage`); README screenshot retaken. Windows allows, final check, refusals, cleanup policy only when this tool set it); administrator checks removed (runs as SYSTEM); `New-LanguageRepository.ps1` takes several languages from `powershell.exe -File`; README screenshot; merged to `main` (#2, #3).

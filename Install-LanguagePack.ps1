@@ -154,11 +154,25 @@ function Show-InstallerForm {
     # Look (TODO item 2, 2026-10-04): easier to read on a large, high-resolution screen - fixed colours (the window runs
     # as SYSTEM, so it should not depend on a user's theme), larger fonts, and layout in 96-DPI units that the form
     # scales to the screen's DPI (AutoScaleMode Dpi; the process is made DPI-aware by Enable-DpiAwareness).
-    $rgb = { param([string]$Html) [System.Drawing.ColorTranslator]::FromHtml($Html) }
-    $colors = @{
-        Back = & $rgb '#F3F4F6'; Panel = & $rgb '#FFFFFF'; Text = & $rgb '#111827'; Hint = & $rgb '#4B5563'
-        Line = & $rgb '#D1D5DB'; Accent = & $rgb '#0F6CBD'; AccentDown = & $rgb '#0C5598'; Border = & $rgb '#9CA3AF'
+    # Two themes, dark by default; the Theme button in the header switches between them.
+    $themes = @{
+        Dark  = @{ Back = '#1F1F1F'; Panel = '#2B2B2B'; Text = '#F3F4F6'; Hint = '#B4BAC4'; Line = '#3D3D3D'; Accent = '#0F6CBD'
+                   AccentDown = '#1A7FD4'; Disabled = '#3D3D3D'; Border = '#6B6B6B'; Hover = '#3A3A3A'; DisabledText = '#8A8F98' }
+        Light = @{ Back = '#F3F4F6'; Panel = '#FFFFFF'; Text = '#111827'; Hint = '#4B5563'; Line = '#D1D5DB'; Accent = '#0F6CBD'
+                   AccentDown = '#0C5598'; Disabled = '#D1D5DB'; Border = '#9CA3AF'; Hover = '#E5E7EB' }
     }
+    foreach ($theme in @($themes.Values)) { foreach ($key in @($theme.Keys)) { $theme[$key] = [System.Drawing.ColorTranslator]::FromHtml($theme[$key]) } }
+    $state.Theme = 'Dark'
+    # Dark title bar (DWMWA_USE_IMMERSIVE_DARK_MODE) and dark log scroll bar, where Windows supports them.
+    try {
+        if (-not ('LanguagePackInstaller.Theme' -as [type])) {
+            Add-Type -Namespace LanguagePackInstaller -Name Theme -ErrorAction Stop -MemberDefinition @'
+[DllImport("dwmapi.dll")] public static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+[DllImport("uxtheme.dll", CharSet = CharSet.Unicode)] public static extern int SetWindowTheme(IntPtr hwnd, string appName, string idList);
+'@
+        }
+    }
+    catch { }
     $fontMain = New-Object System.Drawing.Font('Segoe UI', 11)
     $fontHint = New-Object System.Drawing.Font('Segoe UI', 10)
     $fontButton = New-Object System.Drawing.Font('Segoe UI Semibold', 11)
@@ -177,13 +191,10 @@ function Show-InstallerForm {
     $form.MinimizeBox = $false
     $form.TopMost = $true
     $form.Font = $fontMain
-    $form.BackColor = $colors.Back
-    $form.ForeColor = $colors.Text
 
     $header = New-Object System.Windows.Forms.Panel
     $header.Location = & $point 0 0
     $header.Size = & $size 680 72
-    $header.BackColor = $colors.Panel
     $form.Controls.Add($header)
     $title = New-Object System.Windows.Forms.Label
     $title.Text = 'Windows 11 Language Installer'
@@ -194,14 +205,19 @@ function Show-InstallerForm {
     $subtitle = New-Object System.Windows.Forms.Label
     $subtitle.Text = 'Install a language from the language repository, or uninstall one.'
     $subtitle.Font = $fontHint
-    $subtitle.ForeColor = $colors.Hint
     $subtitle.Location = & $point 20 44
     $subtitle.AutoSize = $true
     $header.Controls.Add($subtitle)
+    $buttonTheme = New-Object System.Windows.Forms.Button
+    $buttonTheme.Name = 'Theme'
+    $buttonTheme.Location = & $point 548 19
+    $buttonTheme.Size = & $size 112 34
+    $buttonTheme.Font = $fontHint
+    $buttonTheme.FlatStyle = 'Flat'
+    $header.Controls.Add($buttonTheme)
     $headerLine = New-Object System.Windows.Forms.Panel
     $headerLine.Location = & $point 0 72
     $headerLine.Size = & $size 680 1
-    $headerLine.BackColor = $colors.Line
     $form.Controls.Add($headerLine)
 
     $labelLanguage = New-Object System.Windows.Forms.Label
@@ -216,8 +232,7 @@ function Show-InstallerForm {
     $comboLanguage.Location = & $point 20 114
     $comboLanguage.Size = & $size 640 30
     $comboLanguage.MaxDropDownItems = 20
-    $comboLanguage.BackColor = $colors.Panel
-    $comboLanguage.ForeColor = $colors.Text
+    $comboLanguage.FlatStyle = 'Flat'   # a themed (non-flat) drop-down list ignores BackColor, so it would stay white
     $form.Controls.Add($comboLanguage)
     $formatItem = {
         param($Entry)
@@ -247,7 +262,6 @@ function Show-InstallerForm {
     $labelDisplay.Location = & $point 42 190
     $labelDisplay.Size = & $size 618 42
     $labelDisplay.Font = $fontHint
-    $labelDisplay.ForeColor = $colors.Hint
     $form.Controls.Add($labelDisplay)
 
     $checkRegional = New-Object System.Windows.Forms.CheckBox
@@ -273,7 +287,6 @@ function Show-InstallerForm {
     $labelUninstall.Location = & $point 240 281
     $labelUninstall.Size = & $size 420 24
     $labelUninstall.Font = $fontHint
-    $labelUninstall.ForeColor = $colors.Hint
     $form.Controls.Add($labelUninstall)
 
     $textLog = New-Object System.Windows.Forms.TextBox
@@ -285,8 +298,6 @@ function Show-InstallerForm {
     $textLog.Location = & $point 20 318
     $textLog.Size = & $size 640 206
     $textLog.Font = New-Object System.Drawing.Font('Consolas', 10.5)
-    $textLog.BackColor = $colors.Panel
-    $textLog.ForeColor = $colors.Text
     $textLog.BorderStyle = 'FixedSingle'
     $form.Controls.Add($textLog)
 
@@ -304,14 +315,11 @@ function Show-InstallerForm {
     $buttonInstall.Font = $fontButton
     $buttonInstall.FlatStyle = 'Flat'
     $buttonInstall.FlatAppearance.BorderSize = 0
-    $buttonInstall.FlatAppearance.MouseOverBackColor = $colors.AccentDown
-    $buttonInstall.FlatAppearance.MouseDownBackColor = $colors.AccentDown
-    $buttonInstall.BackColor = $colors.Accent
-    $buttonInstall.ForeColor = $colors.Panel
+    $buttonInstall.ForeColor = [System.Drawing.Color]::White
     $form.Controls.Add($buttonInstall)
     $form.AcceptButton = $buttonInstall
-    # A disabled flat button keeps its blue with grey text, which is hard to read: light grey while busy instead.
-    $buttonInstall.Add_EnabledChanged({ $buttonInstall.BackColor = $(if ($buttonInstall.Enabled) { $colors.Accent } else { $colors.Line }) })
+    # A disabled flat button keeps its blue with grey text, which is hard to read: grey while busy instead.
+    $buttonInstall.Add_EnabledChanged({ $buttonInstall.BackColor = $(if ($buttonInstall.Enabled) { $themes[$state.Theme].Accent } else { $themes[$state.Theme].Disabled }) })
 
     $buttonClose = New-Object System.Windows.Forms.Button
     $buttonClose.Name = 'Close'
@@ -320,12 +328,66 @@ function Show-InstallerForm {
     $buttonClose.Size = & $size 110 36
     $buttonClose.Font = $fontMain
     $buttonClose.FlatStyle = 'Flat'
-    $buttonClose.FlatAppearance.BorderColor = $colors.Border
-    $buttonClose.BackColor = $colors.Panel
-    $buttonClose.ForeColor = $colors.Text
     $buttonClose.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
     $form.Controls.Add($buttonClose)
     $form.CancelButton = $buttonClose
+
+    $setNativeTheme = {
+        # the title bar and the log's scroll bar are drawn by Windows, not by the form's colours
+        if (-not ('LanguagePackInstaller.Theme' -as [type])) { return }
+        $dark = [int]($state.Theme -eq 'Dark')
+        try {
+            if ($form.IsHandleCreated) { [void][LanguagePackInstaller.Theme]::DwmSetWindowAttribute($form.Handle, 20, [ref]$dark, 4) }
+            if ($textLog.IsHandleCreated) {
+                [void][LanguagePackInstaller.Theme]::SetWindowTheme($textLog.Handle, $(if ($dark) { 'DarkMode_Explorer' } else { 'Explorer' }), [NullString]::Value)
+                $textLog.Invalidate()
+            }
+        }
+        catch { }
+    }
+    $applyTheme = {
+        param([string]$Name)
+        $state.Theme = $Name
+        $c = $themes[$Name]
+        $form.BackColor = $c.Back
+        $form.ForeColor = $c.Text
+        $header.BackColor = $c.Panel
+        $title.ForeColor = $c.Text
+        $subtitle.ForeColor = $c.Hint
+        $headerLine.BackColor = $c.Line
+        $labelDisplay.ForeColor = $c.Hint
+        $labelUninstall.ForeColor = $c.Hint
+        foreach ($field in $comboLanguage, $textLog) { $field.BackColor = $c.Panel; $field.ForeColor = $c.Text }
+        $buttonInstall.FlatAppearance.MouseOverBackColor = $c.AccentDown
+        $buttonInstall.FlatAppearance.MouseDownBackColor = $c.AccentDown
+        $buttonInstall.BackColor = $(if ($buttonInstall.Enabled) { $c.Accent } else { $c.Disabled })
+        foreach ($button in $buttonClose, $buttonTheme) {
+            $button.FlatAppearance.BorderColor = $c.Border
+            $button.FlatAppearance.MouseOverBackColor = $c.Hover
+            $button.FlatAppearance.MouseDownBackColor = $c.Hover
+            $button.BackColor = $c.Panel
+            $button.ForeColor = $c.Text
+        }
+        $buttonTheme.Text = $(if ($Name -eq 'Dark') { 'Light theme' } else { 'Dark theme' })
+        & $setNativeTheme
+    }
+    # A greyed-out check box draws embossed text that is hard to read on a dark background: redraw it in plain grey.
+    $paintDisabled = {
+        param($sender, $e)
+        if ($sender.Enabled -or $state.Theme -ne 'Dark') { return }
+        $glyph = [System.Windows.Forms.CheckBoxRenderer]::GetGlyphSize($e.Graphics, [System.Windows.Forms.VisualStyles.CheckBoxState]::UncheckedDisabled).Width
+        $x = $glyph + [int][Math]::Round(3 * $e.Graphics.DpiX / 96)
+        $rect = New-Object System.Drawing.Rectangle($x, 0, ($sender.Width - $x), $sender.Height)
+        $brush = New-Object System.Drawing.SolidBrush($sender.BackColor)
+        $e.Graphics.FillRectangle($brush, $rect)
+        $brush.Dispose()
+        [System.Windows.Forms.TextRenderer]::DrawText($e.Graphics, $sender.Text, $sender.Font, $rect, $themes.Dark.DisabledText, [System.Windows.Forms.TextFormatFlags]'Left, VerticalCenter, SingleLine, NoPadding')
+    }
+    foreach ($check in $checkDisplay, $checkRegional, $checkUninstall) { $check.Add_Paint($paintDisabled) }
+    & $applyTheme $state.Theme
+    $form.Add_HandleCreated({ & $setNativeTheme })
+    $textLog.Add_HandleCreated({ & $setNativeTheme })
+    $buttonTheme.Add_Click({ & $applyTheme $(if ($state.Theme -eq 'Dark') { 'Light' } else { 'Dark' }) })
     $form.ResumeLayout($false)
     $form.PerformLayout()
 
