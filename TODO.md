@@ -1,0 +1,70 @@
+# TODO - LanguagePackInstaller
+
+Last updated: 2026-10-04.
+
+| # | Item | Status |
+|---|------|--------|
+| [1](#1) | GUI: uninstall an installed language from the window (and reset the display language to the default) | Not started |
+| [2](#2) | GUI: easier-to-read colours and larger fonts for large, high-resolution screens | Not started |
+| [3](#3) | Real tests still open: the corrected uninstall, a run as SYSTEM from ConfigMgr, the display-language path | Open |
+| [4](#4) | Feature-only languages (en-AU, de-CH, zh-HK, ...) cannot be added | Idea |
+
+---
+
+<a id="1"></a>
+## 1. GUI: uninstall an installed language from the window
+
+**Asked 2026-10-04.**
+
+**Wanted:**
+- When the language picked in the drop-down is already installed (`[installed]`), show a check box **Uninstall this language**.
+- Ticking it switches the window to uninstalling: the install options (Set as display language, regional format) are greyed out and the Install button reads **Uninstall**.
+- If the language is the display language, uninstalling it **also sets the display language back to the default** first.
+- When the user ticks Uninstall, show a message that **a restart will be required** (with OK / Cancel; Cancel unticks it). After the uninstall, the result message says to restart (exit code 3010).
+
+**Design notes (to settle while building):**
+- **The default display language** = the language Windows was installed with (`Get-LpiInstallLanguageTag`, from `Nls\Language\InstallLanguage`; en-US on the test PC). Never offer Uninstall for that language itself: show the check box greyed out with "Windows was installed with this language; it cannot be removed".
+- **Resetting the display language** is the display-language install in reverse, for the default language: the system preferred UI language (`Set-SystemPreferredUILanguage`), the Welcome screen and new users (`Copy-UserInternationalSettingsToSystem`), each signed-in user (`Set-UserLanguage.ps1` through the one-shot scheduled task), the Active Setup entry (removed or pointed at the default language), and `HKLM\SOFTWARE\LanguagePackInstaller\DisplayLanguage`.
+- **Today `Uninstall-LpiLanguage` refuses** the system display language and the display language this tool set (1603). It needs an option (for example `-ResetDisplayLanguage`, also on `Uninstall-LanguagePack.ps1` for silent use) that resets first, then removes.
+- **Order to test on a VM:** Windows may refuse to remove the language pack of the language still in use until the restart that applies the default. If so: reset now, register a one-shot SYSTEM startup task (as `Complete-SystemLanguage.ps1` does) that removes the language after the restart, and say so in the message.
+- Per-user language lists keep the removed language until each user removes it (as the uninstall already notes); the reset should at least take it out of the signed-in users' lists.
+- Tests: the GUI wiring on a real form (as the screenshot harness does), and the reset + removal order with DISM and the language cmdlets mocked.
+
+---
+
+<a id="2"></a>
+## 2. GUI: easier-to-read colours and larger fonts
+
+**Asked 2026-10-04.** Assume a large, high-resolution screen.
+
+**Wanted:**
+- Colours that are easier to read: clear contrast between text, input fields, the log box and the buttons (for example dark text on white fields over a light neutral background, one accent colour for the main button, a clearly readable log box).
+- Slightly larger fonts: Segoe UI about 10.5-11 pt for the window (9 pt today), Consolas about 10 pt for the log (8.5 pt today), with the window and controls sized to fit.
+
+**Design notes:**
+- **DPI awareness:** WinForms in Windows PowerShell 5.1 is not DPI-aware, so on a high-resolution screen with scaling Windows stretches the window as a bitmap and the text looks blurry. Make the form DPI-aware before it is created (`SetProcessDPIAware` / per-monitor awareness, `AutoScaleMode = Dpi`) so text is drawn sharp at the real resolution, then check the layout at 100 %, 150 % and 200 % scaling.
+- The window runs as SYSTEM in the user's session (ConfigMgr "allow users to interact"); colours should not depend on the user's theme. Keep the message boxes as they are (system dialogs).
+- Update `images/installer-gui.png` and the README screenshot afterwards.
+
+---
+
+<a id="3"></a>
+## 3. Real tests still open
+
+- **The corrected uninstall** (2026-10-04, removal order): run `Uninstall-LanguagePack.ps1 -Language de-DE` once more on the test PC to remove the leftover `Language.Basic~~~de-DE` (expected exit 0), then a full install + uninstall from a clean start.
+- **A run as SYSTEM from a ConfigMgr application** (the administrator checks were removed for this): install and uninstall programs, exit codes 0 / 3010 / 1603, the detection method, the repository on a share (computer-account access).
+- **The display-language path** (`-SetDisplayLanguage`): the system part, the restart task (`LanguagePackInstaller-CompleteSystemLanguage`), the signed-in user step, Active Setup for other profiles. On a VM snapshot.
+
+---
+
+<a id="4"></a>
+## 4. Feature-only languages
+
+The Languages and Optional Features media has 92 language variants with language features but no language pack (for example en-AU, en-CA, en-IN, de-CH, fr-BE, fr-CH, es-US, zh-HK, hi-IN). The installer offers only languages with a language pack, so it cannot add them. Windows uses them as additional languages (keyboard, spelling, speech, regional format) on top of a display language. Possible addition: list them separately and install their features only.
+
+---
+
+## Done
+
+- 2026-10-04: `Uninstall-LanguagePack.ps1` (removal order Windows allows, final check, refusals, cleanup policy only when this tool set it); administrator checks removed (runs as SYSTEM); `New-LanguageRepository.ps1` takes several languages from `powershell.exe -File`; README screenshot; merged to `main` (#2, #3).
+- 2026-10-03: validated against the real `LanguagesAndOptionalFeatures` folder on Windows 11 25H2 (43 languages, 82 FOD satellites each).
