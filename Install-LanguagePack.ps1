@@ -103,7 +103,8 @@ Import-Module -Name (Join-Path -Path $PSScriptRoot -ChildPath 'LanguagePackInsta
 # A technician double-clicking the script gets a UAC prompt instead of an error.
 if (-not (Test-LpiAdministrator)) {
     if ($Silent) {
-        Write-Error 'The installer must run elevated (administrator or SYSTEM).'
+        # -ErrorAction Continue: under ErrorActionPreference Stop, Write-Error would end the script with exit code 1, not 1603.
+        Write-Error 'The installer must run elevated (administrator or SYSTEM).' -ErrorAction Continue
         exit $ExitFailure
     }
     Start-Process -FilePath (Join-Path -Path $env:windir -ChildPath 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList (Get-RelaunchArgument) -Verb RunAs

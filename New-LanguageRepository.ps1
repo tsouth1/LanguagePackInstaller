@@ -21,7 +21,8 @@
     The repository folder to create or update, local or UNC.
 
 .PARAMETER Language
-    One or more language tags, for example de-DE, fr-FR, ja-JP.
+    One or more language tags, for example de-DE, fr-FR, ja-JP. From powershell.exe -File (cmd, a batch file, a
+    scheduled task) pass them as one comma-separated value: -Language de-DE,fr-FR,ja-JP.
 
 .PARAMETER SkipFodSatellites
     Do not copy the per-language CABs for other Features on Demand.
@@ -34,6 +35,9 @@
 
 .EXAMPLE
     .\New-LanguageRepository.ps1 -Source F:\LanguagesAndOptionalFeatures -Destination \\server\LangRepo -Language de-DE, fr-FR, ja-JP
+
+.EXAMPLE
+    powershell.exe -NoProfile -ExecutionPolicy Bypass -File New-LanguageRepository.ps1 -Source F:\LanguagesAndOptionalFeatures -Destination \\server\LangRepo -Language de-DE,fr-FR,ja-JP
 #>
 [CmdletBinding(DefaultParameterSetName = 'Build')]
 param(
@@ -57,7 +61,12 @@ if ($ListAvailable) {
     return
 }
 
-$tags = foreach ($item in $Language) { ConvertTo-LpiLanguageTag -Language $item }
+# powershell.exe -File passes "-Language de-DE,fr-FR" as one string, not a list, so every value is split on commas,
+# semicolons and spaces as well.
+$tags = @(foreach ($item in $Language) {
+        foreach ($part in ($item -split '[,;\s]+')) { if ($part) { ConvertTo-LpiLanguageTag -Language $part } }
+    }) | Select-Object -Unique
+if (-not $tags) { throw 'No language tag given in -Language.' }
 $missing = @($tags | Where-Object { $available.Tag -notcontains $_ })
 if ($missing) {
     throw "No language pack in $Source for: $($missing -join ', '). Use -ListAvailable to see what is there."
