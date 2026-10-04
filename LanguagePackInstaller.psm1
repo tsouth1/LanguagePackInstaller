@@ -245,11 +245,6 @@ function Get-LpiRepositoryLanguage {
 
 #region Prerequisites
 
-function Test-LpiAdministrator {
-    $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-}
-
 function Test-LpiPrerequisite {
     <# Returns a list of problems that stop the installer from running; empty when all is well. #>
     [CmdletBinding()]
@@ -259,9 +254,7 @@ function Test-LpiPrerequisite {
     )
     $problems = New-Object System.Collections.Generic.List[string]
 
-    if (-not (Test-LpiAdministrator)) {
-        $problems.Add('The installer must run elevated (administrator or SYSTEM).')
-    }
+    # No administrator check: the installer runs as SYSTEM from a ConfigMgr application deployment.
     $os = Get-CimInstance -ClassName Win32_OperatingSystem
     if ([int]$os.BuildNumber -lt 26100) {
         $problems.Add("Windows 11 24H2 (build 26100) or later is required; this device is build $($os.BuildNumber).")
@@ -913,7 +906,6 @@ Export-ModuleMember -Function @(
     'Get-LpiInstalledLanguageTag'
     'Get-LpiLanguageFile'
     'Get-LpiRepositoryLanguage'
-    'Test-LpiAdministrator'
     'Test-LpiPrerequisite'
     'Invoke-LpiInstall'
     'Uninstall-LpiLanguage'
