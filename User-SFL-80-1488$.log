@@ -1,0 +1,12 @@
+﻿<![LOG[Applying es-ES for NT AUTHORITY\SYSTEM.]LOG]!><time="12:34:20.742+240" date="10-05-2026" component="Set-UserLanguage" context="NT AUTHORITY\SYSTEM" type="1" thread="14652" file="">
+<![LOG[Before: language list en-US; display language override (none).]LOG]!><time="12:34:20.825+240" date="10-05-2026" component="Set-UserLanguage" context="NT AUTHORITY\SYSTEM" type="1" thread="14652" file="">
+<![LOG[Language list is now: es-ES, en-US.]LOG]!><time="12:34:21.038+240" date="10-05-2026" component="Set-UserLanguage" context="NT AUTHORITY\SYSTEM" type="1" thread="14652" file="">
+<![LOG[Display language override set to es-ES.]LOG]!><time="12:34:21.043+240" date="10-05-2026" component="Set-UserLanguage" context="NT AUTHORITY\SYSTEM" type="1" thread="14652" file="">
+<![LOG[Regional format set to es-ES and country/region to Spain (GeoId 217).]LOG]!><time="12:34:21.072+240" date="10-05-2026" component="Set-UserLanguage" context="NT AUTHORITY\SYSTEM" type="1" thread="14652" file="">
+<![LOG[Done. The change takes effect at the next sign-in.]LOG]!><time="12:34:21.083+240" date="10-05-2026" component="Set-UserLanguage" context="NT AUTHORITY\SYSTEM" type="1" thread="14652" file="">
+<![LOG[Applying es-ES for NT AUTHORITY\SYSTEM.]LOG]!><time="12:36:23.693+240" date="10-05-2026" component="Set-UserLanguage" context="NT AUTHORITY\SYSTEM" type="1" thread="9404" file="">
+<![LOG[Before: language list en-US; display language override es-ES.]LOG]!><time="12:36:23.756+240" date="10-05-2026" component="Set-UserLanguage" context="NT AUTHORITY\SYSTEM" type="1" thread="9404" file="">
+<![LOG[Language list is now: es-ES, en-US.]LOG]!><time="12:36:23.931+240" date="10-05-2026" component="Set-UserLanguage" context="NT AUTHORITY\SYSTEM" type="1" thread="9404" file="">
+<![LOG[Display language override set to es-ES.]LOG]!><time="12:36:23.946+240" date="10-05-2026" component="Set-UserLanguage" context="NT AUTHORITY\SYSTEM" type="1" thread="9404" file="">
+<![LOG[Regional format set to es-ES and country/region to Spain (GeoId 217).]LOG]!><time="12:36:23.957+240" date="10-05-2026" component="Set-UserLanguage" context="NT AUTHORITY\SYSTEM" type="1" thread="9404" file="">
+<![LOG[Done. The change takes effect at the next sign-in.]LOG]!><time="12:36:23.960+240" date="10-05-2026" component="Set-UserLanguage" context="NT AUTHORITY\SYSTEM" type="1" thread="9404" file="">

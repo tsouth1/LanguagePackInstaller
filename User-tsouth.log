@@ -1,0 +1,6 @@
+﻿<![LOG[Applying es-ES for CORPLEAR\tsouth.]LOG]!><time="12:34:24.618+240" date="10-05-2026" component="Set-UserLanguage" context="CORPLEAR\tsouth" type="1" thread="3068" file="">
+<![LOG[Before: language list en-US; display language override (none).]LOG]!><time="12:34:25.425+240" date="10-05-2026" component="Set-UserLanguage" context="CORPLEAR\tsouth" type="1" thread="3068" file="">
+<![LOG[Language list is now: es-ES, en-US.]LOG]!><time="12:34:25.781+240" date="10-05-2026" component="Set-UserLanguage" context="CORPLEAR\tsouth" type="1" thread="3068" file="">
+<![LOG[Display language override set to es-ES.]LOG]!><time="12:34:25.860+240" date="10-05-2026" component="Set-UserLanguage" context="CORPLEAR\tsouth" type="1" thread="3068" file="">
+<![LOG[Regional format set to es-ES and country/region to Spain (GeoId 217).]LOG]!><time="12:34:26.009+240" date="10-05-2026" component="Set-UserLanguage" context="CORPLEAR\tsouth" type="1" thread="3068" file="">
+<![LOG[Done. The change takes effect at the next sign-in.]LOG]!><time="12:34:26.013+240" date="10-05-2026" component="Set-UserLanguage" context="CORPLEAR\tsouth" type="1" thread="3068" file="">
