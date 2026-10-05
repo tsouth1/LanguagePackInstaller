@@ -544,12 +544,14 @@ function Get-LpiUserScriptArgument {
         [Parameter(Mandatory)][string]$ScriptPath,
         [Parameter(Mandatory)][string]$Language,
         [switch]$SetRegionalFormat,
-        [string]$RemoveLanguage
+        [string]$RemoveLanguage,
+        [string[]]$OnlyUsers
     )
     $logs = Join-Path -Path $script:UserDataRoot -ChildPath 'Logs'
     $arguments = "-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`" -Language $Language -LogDirectory `"$logs`""
     if ($SetRegionalFormat) { $arguments += ' -SetRegionalFormat' }
     if ($RemoveLanguage) { $arguments += " -RemoveLanguage $RemoveLanguage" }
+    if ($OnlyUsers) { $arguments += " -OnlyUsers $($OnlyUsers -join ',')" }
     return $arguments
 }
 
@@ -600,8 +602,18 @@ function Invoke-LpiAsUser {
     }
 }
 
+function Get-LpiUserSid {
+    <# SID of a DOMAIN\user account name, or $null when it cannot be resolved. #>
+    param([Parameter(Mandatory)][string]$UserName)
+    try { return (New-Object System.Security.Principal.NTAccount($UserName)).Translate([System.Security.Principal.SecurityIdentifier]).Value }
+    catch { return $null }
+}
+
 function Register-LpiActiveSetup {
-    <# Applies the per-user settings once to every other user at their next sign-in. #>
+    <#
+        Applies the per-user settings once at each user's next sign-in (Active Setup): to every user, or - when the
+        arguments carry -OnlyUsers - only to those accounts.
+    #>
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Arguments)
     $key = $script:ActiveSetupKey
@@ -611,7 +623,12 @@ function Register-LpiActiveSetup {
     # A higher version makes Active Setup run again for users who already ran an older one.
     Set-LpiRegistryValue -Path $key -Name 'Version' -Value (Get-Date -Format 'yyyy,MMdd,HHmm,ss')
     Set-LpiRegistryValue -Path $key -Name 'IsInstalled' -Value 1 -Type DWord
-    Write-LpiLog -Message 'Registered Active Setup: other existing users get the language settings at their next sign-in.'
+    if ($Arguments -match '-OnlyUsers ') {
+        Write-LpiLog -Message 'Registered Active Setup: the signed-in users get the language settings again at their next sign-in, after the restart.'
+    }
+    else {
+        Write-LpiLog -Message 'Registered Active Setup: other existing users get the language settings at their next sign-in.'
+    }
 }
 
 function Register-LpiCompleteTask {
@@ -727,6 +744,18 @@ function Set-LpiDisplayLanguage {
 
     if ($ApplyToExistingUsers) {
         Register-LpiActiveSetup -Arguments $userArguments
+    }
+    elseif (-not $systemDone) {
+        # Windows postponed the system part: the language pack is still waiting for the restart. At the sign-in after
+        # it, Windows rewrites the language list of an account that was given the language now (seen on Windows 11
+        # 25H2, 2026-10-04: cs-CZ replaced by 'cs' further down the list, the display language back to en-US), so
+        # apply it again then - to the users signed in now, and the running account when that is a user, not SYSTEM.
+        $again = @($users)
+        if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne 'S-1-5-18') { $again += $self }
+        $sids = @($again | ForEach-Object { Get-LpiUserSid -UserName $_ } | Where-Object { $_ } | Sort-Object -Unique)
+        if ($sids) {
+            Register-LpiActiveSetup -Arguments (Get-LpiUserScriptArgument -ScriptPath $publishedScript -Language $tag -SetRegionalFormat:$SetRegionalFormat -RemoveLanguage $RemoveLanguage -OnlyUsers $sids)
+        }
     }
 }
 
@@ -859,7 +888,11 @@ function Reset-LpiDisplayLanguage {
     $default = Get-LpiInstallLanguageTag
     if (-not $default) { throw 'The language Windows was installed with could not be read, so the display language cannot be set back to it.' }
     if ($default -eq $tag) { throw "$tag is the language Windows was installed with; it cannot be removed." }
-    $hadActiveSetup = Test-Path -LiteralPath $script:ActiveSetupKey
+    # Every user gets the default language again at next sign-in only when the language was applied to every user
+    # (-ApplyToExistingUsers); not for an Active Setup entry limited to the users signed in during the install.
+    $stub = $null
+    try { $stub = (Get-ItemProperty -LiteralPath $script:ActiveSetupKey -Name 'StubPath' -ErrorAction Stop).StubPath } catch { }
+    $hadActiveSetup = [bool]($stub -and $stub -notmatch '-OnlyUsers ')
     Write-LpiLog -Message "$tag is the display language; setting the display language back to the default, $default, before uninstalling it."
     Set-LpiDisplayLanguage -Language $default -UserScriptPath $UserScriptPath -RemoveLanguage $tag -ApplyToExistingUsers:$hadActiveSetup
     Remove-ItemProperty -LiteralPath $script:RegistryRoot -Name 'DisplayLanguage' -ErrorAction SilentlyContinue

@@ -23,6 +23,11 @@
     A language being uninstalled: taken out of the account's language list (with its keyboards). Used when the
     display language is set back to the default before that language is removed.
 
+.PARAMETER OnlyUsers
+    Comma-separated SIDs. When given, the script does nothing for any other account (it exits 0, so Active Setup
+    counts it as done). Install-LanguagePack.ps1 uses it to apply the language again after the restart, at the next
+    sign-in, to the users who were signed in during the install - not to every user of the device.
+
 .PARAMETER LogDirectory
     Folder for the per-user log (User-<username>.log). Defaults to %TEMP%.
 
@@ -34,10 +39,15 @@ param(
     [Parameter(Mandatory)][string]$Language,
     [switch]$SetRegionalFormat,
     [string]$RemoveLanguage,
+    [string]$OnlyUsers,
     [string]$LogDirectory = $env:TEMP
 )
 
 $ErrorActionPreference = 'Stop'
+
+if ($OnlyUsers -and (@($OnlyUsers -split '[,;\s]+') -notcontains [Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) {
+    exit 0   # not one of the users this run is for
+}
 
 $logFile = $null
 try {
@@ -62,10 +72,22 @@ try {
     $Language = [Globalization.CultureInfo]::GetCultureInfo($Language).Name
     Write-UserLog "Applying $Language for $([Security.Principal.WindowsIdentity]::GetCurrent().Name)."
 
-    # Put the language first in the user's language list. Keep an existing entry (and its
-    # keyboards) if there is one; every other language stays in the list.
+    $override = $null
+    try { $override = Get-WinUILanguageOverride } catch { }
     $list = Get-WinUserLanguageList
+    Write-UserLog "Before: language list $(($list | ForEach-Object { $_.LanguageTag }) -join ', '); display language override $(if ($override) { $override } else { '(none)' })."
+
+    # Put the language first in the user's language list. Keep an existing entry (and its keyboards) if there is one;
+    # every other language stays in the list. Windows keeps some languages under its own tag - 'cs' for cs-CZ, 'ja'
+    # for ja-JP (seen on Windows 11 25H2, 2026-10-04) - so an entry whose specific culture is this language counts too,
+    # instead of adding a second entry next to it.
+    $sameLanguage = {
+        param($Tag)
+        if ($Tag -eq $Language) { return $true }
+        try { return ([Globalization.CultureInfo]::CreateSpecificCulture($Tag).Name -eq $Language) } catch { return $false }
+    }
     $entry = $list | Where-Object { $_.LanguageTag -eq $Language } | Select-Object -First 1
+    if (-not $entry) { $entry = $list | Where-Object { & $sameLanguage $_.LanguageTag } | Select-Object -First 1 }
     if ($entry) {
         [void]$list.Remove($entry)
     }
@@ -75,9 +97,16 @@ try {
     $list.Insert(0, $entry)
     if ($RemoveLanguage) {
         $RemoveLanguage = [Globalization.CultureInfo]::GetCultureInfo($RemoveLanguage).Name
-        foreach ($old in @($list | Where-Object { $_.LanguageTag -eq $RemoveLanguage -and $_.LanguageTag -ne $Language })) {
+        # also Windows' own tag for it ('ja' for ja-JP), never the language being set
+        $removeTag = $RemoveLanguage
+        $isRemoved = {
+            param($Tag)
+            if ($Tag -eq $removeTag) { return $true }
+            try { return ([Globalization.CultureInfo]::CreateSpecificCulture($Tag).Name -eq $removeTag) } catch { return $false }
+        }
+        foreach ($old in @($list | Where-Object { (& $isRemoved $_.LanguageTag) -and -not [object]::ReferenceEquals($_, $entry) })) {
             [void]$list.Remove($old)
-            Write-UserLog "Removed $RemoveLanguage from the language list (it is being uninstalled)."
+            Write-UserLog "Removed $($old.LanguageTag) from the language list ($RemoveLanguage is being uninstalled)."
         }
     }
     Set-WinUserLanguageList -LanguageList $list -Force

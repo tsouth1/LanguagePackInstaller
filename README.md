@@ -68,7 +68,8 @@ settings and the actual user sees nothing. So the installer:
 2. Runs `Set-UserLanguage.ps1` as **each signed-in user** through a one-shot scheduled task
    (`LogonType Interactive`, no password needed when SYSTEM registers it).
 3. With `-ApplyToExistingUsers`, registers **Active Setup** so every other existing profile
-   gets the settings once at its next sign-in.
+   gets the settings once at its next sign-in. Without it, Active Setup is used only to apply the settings again
+   to the signed-in users after the restart, when the language pack was just added (see step 6 below).
 
 PSAppDeployToolkit is not required. See [Using PSAppDeployToolkit 4.x](#using-psappdeploytoolkit-4x)
 if you want to wrap it anyway.
@@ -93,7 +94,10 @@ if you want to wrap it anyway.
    applies the per-user settings, and registers the startup task
    `LanguagePackInstaller-CompleteSystemLanguage`. That task finishes the system part after the
    restart and then removes itself; a second restart then shows the new language on the
-   Welcome screen.
+   Welcome screen. In that case Windows also rewrites the language list of the signed-in users at their first
+   sign-in after the restart, which undid the display language (ConfigMgr test, 2026-10-05). So the installer
+   registers **Active Setup** limited to those users (`-OnlyUsers <SIDs>`): their settings are applied again at
+   that sign-in, and the new language shows from the sign-in after.
 7. Writes `HKLM\SOFTWARE\LanguagePackInstaller\Languages\<tag>` (`InstalledOn`, `Source`) and, for
    the display language, `HKLM\SOFTWARE\LanguagePackInstaller\DisplayLanguage`.
 
