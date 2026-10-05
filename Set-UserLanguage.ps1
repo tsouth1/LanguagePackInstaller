@@ -31,6 +31,9 @@
 .PARAMETER LogDirectory
     Folder for the per-user log (User-<username>.log). Defaults to %TEMP%.
 
+.PARAMETER DesktopKey
+    Registry key that holds PreferredUILanguages. Only the tests change it.
+
 .EXAMPLE
     .\Set-UserLanguage.ps1 -Language fr-FR -SetRegionalFormat
 #>
@@ -40,14 +43,11 @@ param(
     [switch]$SetRegionalFormat,
     [string]$RemoveLanguage,
     [string]$OnlyUsers,
-    [string]$LogDirectory = $env:TEMP
+    [string]$LogDirectory = $env:TEMP,
+    [string]$DesktopKey = 'HKCU:\Control Panel\Desktop'
 )
 
 $ErrorActionPreference = 'Stop'
-
-if ($OnlyUsers -and (@($OnlyUsers -split '[,;\s]+') -notcontains [Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) {
-    exit 0   # not one of the users this run is for
-}
 
 $logFile = $null
 try {
@@ -68,14 +68,21 @@ function Write-UserLog {
     Write-Output $Message
 }
 
+if ($OnlyUsers -and (@($OnlyUsers -split '[,;\s]+') -notcontains [Security.Principal.WindowsIdentity]::GetCurrent().User.Value)) {
+    Write-UserLog "Skipped: $([Security.Principal.WindowsIdentity]::GetCurrent().Name) is not one of the users this run is for."
+    exit 0   # Active Setup counts it as done
+}
+
 try {
     $Language = [Globalization.CultureInfo]::GetCultureInfo($Language).Name
     Write-UserLog "Applying $Language for $([Security.Principal.WindowsIdentity]::GetCurrent().Name)."
 
     $override = $null
     try { $override = Get-WinUILanguageOverride } catch { }
+    $preferred = $null
+    try { $preferred = (Get-ItemProperty -LiteralPath $DesktopKey -Name PreferredUILanguages -ErrorAction Stop).PreferredUILanguages } catch { }
     $list = Get-WinUserLanguageList
-    Write-UserLog "Before: language list $(($list | ForEach-Object { $_.LanguageTag }) -join ', '); display language override $(if ($override) { $override } else { '(none)' })."
+    Write-UserLog "Before: language list $(($list | ForEach-Object { $_.LanguageTag }) -join ', '); display language override $(if ($override) { $override } else { '(none)' }); PreferredUILanguages $(if ($preferred) { $preferred -join ', ' } else { '(none)' })."
 
     # Put the language first in the user's language list. Keep an existing entry (and its keyboards) if there is one;
     # every other language stays in the list. Windows keeps some languages under its own tag - 'cs' for cs-CZ, 'ja'
@@ -114,6 +121,14 @@ try {
 
     Set-WinUILanguageOverride -Language $Language
     Write-UserLog "Display language override set to $Language."
+
+    # The override alone is not enough: an account that already has PreferredUILanguages (en-US on a domain profile,
+    # ConfigMgr test 2026-10-05) keeps signing in with that value, and the override never reaches it. Windows signs in
+    # with PreferredUILanguages, so write it too, and drop a pending value that would replace it at the next sign-in.
+    if (-not (Test-Path -LiteralPath $DesktopKey)) { New-Item -Path $DesktopKey -Force | Out-Null }
+    New-ItemProperty -LiteralPath $DesktopKey -Name PreferredUILanguages -Value ([string[]]@($Language)) -PropertyType MultiString -Force | Out-Null
+    Remove-ItemProperty -LiteralPath $DesktopKey -Name PreferredUILanguagesPending -ErrorAction SilentlyContinue
+    Write-UserLog "PreferredUILanguages set to $Language."
 
     if ($SetRegionalFormat) {
         Set-Culture -CultureInfo $Language

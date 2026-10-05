@@ -1,12 +1,12 @@
 # TODO - LanguagePackInstaller
 
-Last updated: 2026-10-04.
+Last updated: 2026-10-05.
 
 | # | Item | Status |
 |---|------|--------|
 | [1](#1) | GUI: uninstall an installed language from the window (and reset the display language to the default) | Done 2026-10-04 (tested on a VM: fr-FR display language reset to en-US and uninstalled, then de-DE) |
 | [2](#2) | GUI: easier-to-read colours and larger fonts for large, high-resolution screens | Built 2026-10-04 (tested on the real form at 100 %, 150 %/200 % simulated); check on a scaled screen |
-| [3](#3) | Real tests still open: the corrected uninstall, a run as SYSTEM from ConfigMgr, the display-language path | Open |
+| [3](#3) | Real tests still open: the corrected uninstall, a run as SYSTEM from ConfigMgr, the display-language path | Open; ConfigMgr run 2026-10-05: user display language fixed (PreferredUILanguages), Active Setup not running |
 | [4](#4) | Feature-only languages (en-AU, de-CH, zh-HK, ...) | Built 2026-10-04 (mock-tested); test a real install on a VM |
 
 ---
@@ -67,6 +67,8 @@ Last updated: 2026-10-04.
 - **The corrected uninstall** (2026-10-04, removal order): run `Uninstall-LanguagePack.ps1 -Language de-DE` once more on the test PC to remove the leftover `Language.Basic~~~de-DE` (expected exit 0), then a full install + uninstall from a clean start.
 - **A run as SYSTEM from a ConfigMgr application** (the administrator checks were removed for this): install and uninstall programs, exit codes 0 / 3010 / 1603, the detection method, the repository on a share (computer-account access).
 - **The display-language path** (`-SetDisplayLanguage`): the system part and the restart task (`LanguagePackInstaller-CompleteSystemLanguage`) passed on a VM 2026-10-04 (fr-FR); still open: another signed-in user, Active Setup for other profiles.
+- **ConfigMgr run as SYSTEM, es-ES on a domain-joined Windows 11 device (2026-10-05, logs uploaded with 4b9748d):** install exit 3010, the restart task set the system language and the Welcome screen came up in Spanish. **The signed-in user stayed English** after the restart and after another sign-out: their language list (`es-ES, en-US`) and override (es-ES) were set, but `HKCU\Control Panel\Desktop\PreferredUILanguages` still held `en-US`, and Windows signs in with that value. Setting it to es-ES by hand and signing out/in gave Spanish. **Fixed:** `Set-UserLanguage.ps1` now writes `PreferredUILanguages` as well (and removes a stale `PreferredUILanguagesPending`), logs the value it found, and logs a line when `-OnlyUsers` skips an account instead of exiting silently (4 new checks in `Test-DisplayLanguage.ps1`, which also had a quoting bug in its `-OnlyUsers` check; 16 + 28 checks pass on PS 5.1 and 7). **To confirm:** a fresh install on that device or another domain profile.
+- **Open: the Active Setup entry never ran for the signed-in user** (same device). The HKLM entry is correct (StubPath, `-OnlyUsers` with the user's SID, Version `2026,1005,1234,35`, IsInstalled 1), but there is no HKCU Version for it after two sign-ins, while 6 other Active Setup entries have run for that user. Next: compare our HKLM entry with those that run (value types, key name, Version format).
 
 ---
 

@@ -55,7 +55,7 @@ and uses LanguagePackManagement for the system settings afterwards (`Set-SystemP
 | Welcome screen and new-user defaults | `Copy-UserInternationalSettingsToSystem` | **System**, copied *from the running account* | HKLM, Default user hive | Admin |
 | System locale (non-Unicode programs) | `Set-WinSystemLocale` | **System** | HKLM | Admin, restart |
 | Keep unused language packs | `BlockCleanupOfUnusedPreinstalledLangPacks` policy | **System** | HKLM | Admin |
-| Display language for a user | `Set-WinUILanguageOverride` | **User** | `HKCU\Control Panel\Desktop` | Sign-out |
+| Display language for a user | `Set-WinUILanguageOverride`, plus `PreferredUILanguages` written directly (an account that already has that value, such as a domain profile, keeps it otherwise) | **User** | `HKCU\Control Panel\Desktop` | Sign-out |
 | Language list and keyboards | `Set-WinUserLanguageList` | **User** | `HKCU\Control Panel\International\User Profile`, `HKCU\Keyboard Layout` | |
 | Regional format | `Set-Culture` | **User** | `HKCU\Control Panel\International` | |
 | Country or region | `Set-WinHomeLocation` | **User** | `HKCU\Control Panel\International\Geo` | |
