@@ -1,6 +1,6 @@
 # TODO - LanguagePackInstaller
 
-Last updated: 2026-10-05.
+Last updated: 2026-10-06.
 
 | # | Item | Status |
 |---|------|--------|
@@ -8,6 +8,7 @@ Last updated: 2026-10-05.
 | [2](#2) | GUI: easier-to-read colours and larger fonts for large, high-resolution screens | Built 2026-10-04 (tested on the real form at 100 %, 150 %/200 % simulated); check on a scaled screen |
 | [3](#3) | Real tests still open: the corrected uninstall, a run as SYSTEM from ConfigMgr, the display-language path | Open; ConfigMgr run 2026-10-05: user display language fixed (PreferredUILanguages), Active Setup not running |
 | [4](#4) | Feature-only languages (en-AU, de-CH, zh-HK, ...) | Built 2026-10-04 (mock-tested); test a real install on a VM |
+| [5](#5) | GUI: Restart button in the "installed" message, with "Restart now? Click the Restart button below." | Built 2026-10-06 (tested on the real form, install and restart mocked); confirm on a real device |
 
 ---
 
@@ -88,7 +89,29 @@ The Languages and Optional Features media has 92 language variants with language
 
 ---
 
+<a id="5"></a>
+## 5. GUI: Restart button in the "installed" message
+
+**Asked 2026-10-06.** **Built 2026-10-06** (tested on the real form with the install and the restart mocked); confirm on a real device.
+
+**Wanted:**
+- The message that says the language pack is installed gets a **Restart** button.
+- Its text gains **"Restart now? Click the Restart button below."**
+
+**Built:**
+- `Show-RestartPrompt`: a small dialog in the window's theme (a `MessageBox` cannot name its buttons) with the result message, "A restart is required to finish." and "Restart now? Click the Restart button below.", a blue **Restart** button and **Close**. Close has the focus and is the Esc / title-bar X answer, so Enter never restarts by accident. Sized by a table layout, so it fits the text at any DPI.
+- Shown whenever the run ends with 3010 - an install and also an uninstall (both say to restart). Exit code 0 keeps the plain OK message.
+- **Restart** (`Start-LpiRestart`): `shutdown.exe /r /t 15 /d p:4:2` (Application: Installation, planned), logged, and the window closes, so the script still exits with 3010 before the restart (ConfigMgr records the result). If shutdown.exe fails, a warning says to restart from the Start menu. **Close**: logged, the window's log says "Restart the device later to finish.", nothing else changes.
+- Silent runs (`-Silent`) never show it; ConfigMgr still gets 3010 and handles the restart itself.
+- Tests: `Test-Gui.ps1` 10 more checks (31; PS 5.1 and 7): the dialog's text, buttons, colours, focus and layout; Restart returns true, Close and X false; on the window, through a fake install module - 3010 shows the dialog over the window in its theme, Restart restarts once (mocked) and closes with 3010, Close leaves the window open, exit 0 shows the plain message and no dialog.
+
+**To confirm on a real device:** an install that needs a restart from the window - press Close once (window stays), then a second install or uninstall and press Restart: the device restarts after about 15 seconds and the log ends with `finished with exit code 3010`.
+
+---
+
 ## Done
+
+- 2026-10-06: item 5 built - Restart button in the "restart needed" message (install and uninstall), delayed restart so the exit code still reaches ConfigMgr. `Test-Gui.ps1` 31 checks.
 
 - 2026-10-04: item 4 built - feature-only languages (install their features and font; no display language). `-LightTheme` switch; Windows postponing the system display language until the restart is now logged as information, not a warning.
 

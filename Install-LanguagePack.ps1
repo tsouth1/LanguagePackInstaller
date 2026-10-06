@@ -155,6 +155,102 @@ function Confirm-UninstallChoice {
     return ($answer -eq [System.Windows.Forms.DialogResult]::OK)
 }
 
+function Show-RestartPrompt {
+    <#
+        The "installed / uninstalled, restart needed" message with a Restart button (TODO item 5, 2026-10-06). A
+        MessageBox cannot name its buttons, so this is a small dialog in the window's colours. Returns $true for Restart.
+    #>
+    param($Owner, [Parameter(Mandatory)][string]$Text, [Parameter(Mandatory)][hashtable]$Colors, [bool]$Dark)
+    $dialog = New-Object System.Windows.Forms.Form
+    $dialog.Name = 'RestartPrompt'
+    $dialog.Text = 'Windows 11 Language Installer'
+    $dialog.AutoScaleDimensions = New-Object System.Drawing.SizeF(96, 96)
+    $dialog.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
+    $dialog.FormBorderStyle = 'FixedDialog'
+    $dialog.StartPosition = $(if ($Owner) { 'CenterParent' } else { 'CenterScreen' })
+    $dialog.MaximizeBox = $false
+    $dialog.MinimizeBox = $false
+    $dialog.ShowInTaskbar = $false
+    $dialog.TopMost = $true
+    $dialog.AutoSize = $true
+    $dialog.AutoSizeMode = 'GrowAndShrink'
+    $dialog.Font = New-Object System.Drawing.Font('Segoe UI', 11)
+    $dialog.BackColor = $Colors.Back
+    $dialog.ForeColor = $Colors.Text
+
+    # message above, buttons below on the right; the table sizes the dialog to the text at any DPI
+    $layout = New-Object System.Windows.Forms.TableLayoutPanel
+    $layout.AutoSize = $true
+    $layout.AutoSizeMode = 'GrowAndShrink'
+    $layout.ColumnCount = 1
+    $layout.RowCount = 2
+    $layout.Padding = New-Object System.Windows.Forms.Padding(20, 20, 20, 16)
+    $dialog.Controls.Add($layout)
+
+    $message = New-Object System.Windows.Forms.Label
+    $message.Name = 'Message'
+    $message.Text = $Text
+    $message.AutoSize = $true
+    $message.MaximumSize = New-Object System.Drawing.Size(460, 0)
+    $message.Margin = New-Object System.Windows.Forms.Padding(0, 0, 0, 18)
+    $layout.Controls.Add($message, 0, 0)
+
+    $buttons = New-Object System.Windows.Forms.FlowLayoutPanel
+    $buttons.FlowDirection = 'RightToLeft'
+    $buttons.AutoSize = $true
+    $buttons.AutoSizeMode = 'GrowAndShrink'
+    $buttons.Anchor = 'Right'
+    $buttons.Margin = New-Object System.Windows.Forms.Padding(0)
+    $layout.Controls.Add($buttons, 0, 1)
+
+    $close = New-Object System.Windows.Forms.Button
+    $close.Name = 'Close'
+    $close.Text = 'Close'
+    $close.Size = New-Object System.Drawing.Size(110, 36)
+    $close.FlatStyle = 'Flat'
+    $close.FlatAppearance.BorderColor = $Colors.Border
+    $close.FlatAppearance.MouseOverBackColor = $Colors.Hover
+    $close.BackColor = $Colors.Panel
+    $close.ForeColor = $Colors.Text
+    $close.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+    $close.Margin = New-Object System.Windows.Forms.Padding(8, 0, 0, 0)
+    $buttons.Controls.Add($close)
+
+    $restart = New-Object System.Windows.Forms.Button
+    $restart.Name = 'Restart'
+    $restart.Text = 'Restart'
+    $restart.Size = New-Object System.Drawing.Size(110, 36)
+    $restart.Font = New-Object System.Drawing.Font('Segoe UI Semibold', 11)
+    $restart.FlatStyle = 'Flat'
+    $restart.FlatAppearance.BorderSize = 0
+    $restart.FlatAppearance.MouseOverBackColor = $Colors.AccentDown
+    $restart.FlatAppearance.MouseDownBackColor = $Colors.AccentDown
+    $restart.BackColor = $Colors.Accent
+    $restart.ForeColor = [System.Drawing.Color]::White
+    $restart.DialogResult = [System.Windows.Forms.DialogResult]::Yes
+    $restart.Margin = New-Object System.Windows.Forms.Padding(0)
+    $buttons.Controls.Add($restart)
+
+    # Esc and the title bar's X mean Close; Enter does not restart by accident (Close has the focus).
+    $dialog.CancelButton = $close
+    $dialog.Add_Shown({ $close.Focus() })
+    if ($Dark -and ('LanguagePackInstaller.Theme' -as [type])) {
+        $dialog.Add_HandleCreated({ $on = 1; try { [void][LanguagePackInstaller.Theme]::DwmSetWindowAttribute($dialog.Handle, 20, [ref]$on, 4) } catch { } })
+    }
+    try { return ($dialog.ShowDialog($Owner) -eq [System.Windows.Forms.DialogResult]::Yes) }
+    finally { $dialog.Dispose() }
+}
+
+function Start-LpiRestart {
+    <#
+        Restarts the device a few seconds from now, so this script can still exit with its code first (ConfigMgr
+        records 3010 for the install before the restart). Reason: Application, Installation (Planned).
+    #>
+    $shutdown = Join-Path -Path $env:windir -ChildPath 'System32\shutdown.exe'
+    & $shutdown /r /t 15 /d p:4:2 /c 'Windows 11 Language Installer: restarting to finish the language change.'
+    if ($LASTEXITCODE -ne 0) { throw "shutdown.exe returned $LASTEXITCODE." }
+}
+
 function Show-InstallerForm {
     [CmdletBinding()]
     param(
@@ -540,8 +636,28 @@ function Show-InstallerForm {
                 $comboLanguage.Items[$state.Index] = (& $formatItem $entry)
                 & $updateUninstall
                 $text = $result.Message
-                if ($code -eq 3010) { $text += [Environment]::NewLine + [Environment]::NewLine + 'A restart is required to finish.' }
-                [void][System.Windows.Forms.MessageBox]::Show($form, $text, $form.Text, 'OK', 'Information')
+                if ($code -eq 3010) {
+                    $text += [Environment]::NewLine + [Environment]::NewLine + 'A restart is required to finish.' +
+                        [Environment]::NewLine + [Environment]::NewLine + 'Restart now? Click the Restart button below.'
+                    if (Show-RestartPrompt -Owner $form -Text $text -Colors $themes[$state.Theme] -Dark ($state.Theme -eq 'Dark')) {
+                        try {
+                            Start-LpiRestart
+                            Write-LpiLog -Message 'Restart chosen in the window: the device restarts in 15 seconds.'
+                            $form.Close()
+                        }
+                        catch {
+                            Write-LpiLog -Level Warning -Message "Could not restart the device: $($_.Exception.Message)"
+                            [void][System.Windows.Forms.MessageBox]::Show($form, "Could not restart the device: $($_.Exception.Message)$([Environment]::NewLine)Restart it from the Start menu.", $form.Text, 'OK', 'Warning')
+                        }
+                    }
+                    else {
+                        Write-LpiLog -Message 'Restart postponed in the window (Close).'
+                        $textLog.AppendText('Restart the device later to finish.' + [Environment]::NewLine)
+                    }
+                }
+                else {
+                    [void][System.Windows.Forms.MessageBox]::Show($form, $text, $form.Text, 'OK', 'Information')
+                }
             }
             else {
                 $text = $(if ($state.Mode -eq 'Uninstall') { 'The uninstall failed.' } else { 'The installation failed.' })
